@@ -12,19 +12,22 @@ load_dotenv()
 app = FastAPI(title="AI Interviewer Service", version="2.0.0")
 
 # ── Configuration ──────────────────────────────────────────────────────────
-LLM_API_URL     = os.getenv("LLM_API_URL",      "https://api.siliconflow.cn/v1/chat/completions")
-LLM_API_KEY     = os.getenv("SILICONFLOW_API_KEY", "")
-MODEL_NAME      = os.getenv("MODEL_NAME",       "tencent/Hunyuan-MT-7B")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL",  "BAAI/bge-m3")
-EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "https://api.siliconflow.cn/v1/embeddings")
-DASHSCOPE_KEY   = os.getenv("DASHSCOPE_API_KEY", "")
+# 优先使用 Agnes AI，未配置时降级到 SiliconFlow，均无则使用 mock
+AGNES_API_KEY     = os.getenv("AGNES_API_KEY",       "")
+SILICONFLOW_API_KEY = os.getenv("SILICONFLOW_API_KEY", "")
+LLM_API_KEY       = AGNES_API_KEY or SILICONFLOW_API_KEY
+LLM_API_URL       = os.getenv("LLM_API_URL",        "https://apihub.agnes-ai.com/v1/chat/completions")
+MODEL_NAME        = os.getenv("MODEL_NAME",         "agnes-2.5-flash")
+EMBEDDING_MODEL   = os.getenv("EMBEDDING_MODEL",    "BAAI/bge-m3")
+EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL",  "https://api.siliconflow.cn/v1/embeddings")
+DASHSCOPE_KEY     = os.getenv("DASHSCOPE_API_KEY",  "")
 
 # ── In-memory storage ─────────────────────────────────────────────────────
 question_history: Dict[int, List[Dict]] = {}
 knowledge_index: List[Dict[str, Any]] = []   # [{chunk, embedding, doc_id}]
 
 # ── LLM helper ─────────────────────────────────────────────────────────────
-def call_llm(messages: list, temperature: float = 0.7) -> str:
+def call_llm(messages: list, temperature: float = 0.7, timeout: int = 60) -> str:
     if not LLM_API_KEY:
         return ""
     try:
@@ -33,10 +36,13 @@ def call_llm(messages: list, temperature: float = 0.7) -> str:
             LLM_API_URL,
             headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
             json={"model": MODEL_NAME, "messages": messages, "temperature": temperature},
-            timeout=30,
+            timeout=timeout,
         )
         resp.raise_for_status()
         return resp.json()["choices"][0]["message"]["content"]
+    except httpx.TimeoutException as e:
+        print(f"[LLM timeout] {e}")
+        return ""
     except Exception as e:
         print(f"[LLM error] {e}")
         return ""
