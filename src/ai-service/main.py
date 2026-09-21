@@ -27,6 +27,22 @@ question_history: Dict[int, List[Dict]] = {}
 knowledge_index: List[Dict[str, Any]] = []   # [{chunk, embedding, doc_id}]
 
 # ── LLM helper ─────────────────────────────────────────────────────────────
+def _parse_llm_json(text: str) -> dict | None:
+    """从 LLM 返回文本中提取 JSON，兼容 ```json 包裹格式"""
+    if not text:
+        return None
+    cleaned = text.strip()
+    # 去掉开头的 ```json 或 ``` 包裹
+    if cleaned.startswith("```"):
+        cleaned = cleaned[3:]
+        if cleaned.startswith("json"):
+            cleaned = cleaned[4:]
+    cleaned = cleaned.strip()
+    try:
+        return json.loads(cleaned)
+    except json.JSONDecodeError:
+        return None
+
 def call_llm(messages: list, temperature: float = 0.7, timeout: int = 90) -> str:
     if not LLM_API_KEY:
         return ""
@@ -257,13 +273,14 @@ async def generate_question(req: QuestionGenerateRequest):
 
     if llm_result:
         try:
-            parsed = json.loads(llm_result.strip().lstrip("```").lstrip("json"))
-            return JSONResponse(content={
-                "content":    parsed.get("content", ""),
-                "type":       parsed.get("type", req.interviewType),
-                "difficulty": parsed.get("difficulty", final_difficulty),
-                "targetSkill": parsed.get("targetSkill", job_skill_text or "通用技术"),
-            })
+            parsed = _parse_llm_json(llm_result)
+            if parsed:
+                return JSONResponse(content={
+                    "content":    parsed.get("content", ""),
+                    "type":       parsed.get("type", req.interviewType),
+                    "difficulty": parsed.get("difficulty", final_difficulty),
+                    "targetSkill": parsed.get("targetSkill", job_skill_text or "通用技术"),
+                })
         except json.JSONDecodeError:
             pass
 
@@ -307,8 +324,9 @@ async def followup_question(req: dict):
     ])
     if llm_result:
         try:
-            parsed = json.loads(llm_result.strip().lstrip("```").lstrip("json"))
-            return JSONResponse(content=parsed)
+            parsed = _parse_llm_json(llm_result)
+            if parsed:
+                return JSONResponse(content=parsed)
         except: pass
     return JSONResponse(content={
         "content": "请结合实际项目经验，详细说明你在上述场景中遇到的具体问题和解决方案。",
@@ -364,8 +382,9 @@ async def evaluate_answer(req: EvaluateRequest):
     ])
     if llm_result:
         try:
-            parsed = json.loads(llm_result.strip().lstrip("```").lstrip("json"))
-            return JSONResponse(content=parsed)
+            parsed = _parse_llm_json(llm_result)
+            if parsed:
+                return JSONResponse(content=parsed)
         except json.JSONDecodeError:
             pass
 
@@ -444,9 +463,9 @@ async def parse_resume(req: ResumeParseRequest):
     ])
     if llm_result:
         try:
-            cleaned = llm_result.strip().lstrip("```").lstrip("json")
-            parsed = json.loads(cleaned)
-            return JSONResponse(content=parsed)
+            parsed = _parse_llm_json(llm_result)
+            if parsed:
+                return JSONResponse(content=parsed)
         except: pass
 
     return JSONResponse(content={
