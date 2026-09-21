@@ -114,17 +114,15 @@ async function submitAnswerFn() {
       audioChunks.value = []
       answerStartTime.value = Date.now()
 
-      // 检查是否还有下一题
+      // 先预加载下一题，再递增索引（保证 lastQuestionId 始终有效）
       if (answeredCount.value < totalQuestions.value) {
         const loaded = await loadNextQuestion()
         if (loaded) {
           currentQuestionIndex.value++
         } else {
-          // 后端返回"没有更多题目"，直接结束
           await autoFinish()
         }
       } else {
-        // 最后一题答完，自动结束
         await autoFinish()
       }
     }

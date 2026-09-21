@@ -27,7 +27,7 @@ question_history: Dict[int, List[Dict]] = {}
 knowledge_index: List[Dict[str, Any]] = []   # [{chunk, embedding, doc_id}]
 
 # ── LLM helper ─────────────────────────────────────────────────────────────
-def call_llm(messages: list, temperature: float = 0.7, timeout: int = 60) -> str:
+def call_llm(messages: list, temperature: float = 0.7, timeout: int = 90) -> str:
     if not LLM_API_KEY:
         return ""
     try:
