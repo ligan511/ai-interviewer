@@ -1,0 +1,40 @@
+﻿# ── 依赖目录 ──────────────────────────────────────────────
+node_modules/
+__pycache__/
+**/__pycache__/
+target/
+.idea/
+.vscode/
+
+# ── 构建产物 ──────────────────────────────────────────────
+src/frontend/dist/
+src/backend/target/
+
+# ── 日志文件 ──────────────────────────────────────────────
+*.log
+*.err
+npm-start.log
+frontend.log
+backend.err
+ai-service.err
+
+# ── 敏感配置（含真实密钥）────────────────────────────
+src/ai-service/.env
+src/backend/src/main/resources/application-local.yml
+
+# ── 用户上传文件 ──────────────────────────────────────────
+src/backend/uploads/
+
+# ── 测试脚本（非项目源码）─────────────────────────────
+test_*.py
+debug_*.py
+check_*.py
+
+# ── 重复/备份目录 ──────────────────────────────────────
+DAI 智能面试官与求职能力评估系统srcfrontend/
+
+# ── 操作系统文件 ──────────────────────────────────────────
+.DS_Store
+Thumbs.db
+# 含敏感信息的环境配置
+src/backend/src/main/resources/application.yml
