@@ -6,15 +6,18 @@ import json
 import os
 import hashlib
 import numpy as np
+from dotenv import load_dotenv
+load_dotenv()
 
 app = FastAPI(title="AI Interviewer Service", version="2.0.0")
 
 # ── Configuration ──────────────────────────────────────────────────────────
-LLM_API_URL  = os.getenv("LLM_API_URL",  "https://api.openai.com/v1/chat/completions")
-LLM_API_KEY  = os.getenv("LLM_API_KEY",  "")
-MODEL_NAME   = os.getenv("MODEL_NAME",   "gpt-4o-mini")
-EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL", "text-embedding-3-small")
-DASHSCOPE_KEY = os.getenv("DASHSCOPE_API_KEY", "")
+LLM_API_URL     = os.getenv("LLM_API_URL",      "https://api.siliconflow.cn/v1/chat/completions")
+LLM_API_KEY     = os.getenv("SILICONFLOW_API_KEY", "")
+MODEL_NAME      = os.getenv("MODEL_NAME",       "tencent/Hunyuan-MT-7B")
+EMBEDDING_MODEL = os.getenv("EMBEDDING_MODEL",  "BAAI/bge-m3")
+EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL", "https://api.siliconflow.cn/v1/embeddings")
+DASHSCOPE_KEY   = os.getenv("DASHSCOPE_API_KEY", "")
 
 # ── In-memory storage ─────────────────────────────────────────────────────
 question_history: Dict[int, List[Dict]] = {}
@@ -44,7 +47,7 @@ def call_embedding(text: str) -> List[float]:
     try:
         import httpx
         resp = httpx.post(
-            "https://api.openai.com/v1/embeddings",
+            EMBEDDING_API_URL,
             headers={"Authorization": f"Bearer {LLM_API_KEY}", "Content-Type": "application/json"},
             json={"model": EMBEDDING_MODEL, "input": text},
             timeout=30,
