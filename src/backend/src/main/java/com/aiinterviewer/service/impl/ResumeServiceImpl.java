@@ -48,10 +48,10 @@ public class ResumeServiceImpl extends ServiceImpl<UserResumeMapper, UserResume>
                 ext = fileName.substring(fileName.lastIndexOf("."));
             }
             String safeName = UUID.randomUUID().toString() + ext;
-            Path dir = Paths.get(uploadDir, "resumes");
+            Path dir = Paths.get(uploadDir, "resumes").toAbsolutePath().normalize();
             Files.createDirectories(dir);
             Path path = dir.resolve(safeName);
-            file.transferTo(path.toFile());
+            file.transferTo(path);
 
             UserResume resume = new UserResume();
             resume.setUserId(userId);

@@ -1,6 +1,7 @@
 package com.aiinterviewer.common;
 
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.dao.DuplicateKeyException;
 import org.springframework.security.access.AccessDeniedException;
 import org.springframework.web.bind.annotation.ExceptionHandler;
 import org.springframework.web.bind.annotation.RestControllerAdvice;
@@ -31,6 +32,12 @@ public class GlobalExceptionHandler {
     public ApiResponse<Void> handleIllegalArgument(IllegalArgumentException e) {
         log.error("Invalid argument: {}", e.getMessage());
         return ApiResponse.error(400, "请求参数错误");
+    }
+
+    @ExceptionHandler(DuplicateKeyException.class)
+    public ApiResponse<Void> handleDuplicateKey(DuplicateKeyException e) {
+        log.warn("Duplicate key conflict: {}", e.getMostSpecificCause().getMessage());
+        return ApiResponse.error(409, "该题已提交过答案，请直接查看下一题");
     }
 
     @ExceptionHandler(RuntimeException.class)

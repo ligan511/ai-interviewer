@@ -6,7 +6,11 @@
       <el-table-column prop="createdAt" label="面试时间" width="180" />
       <el-table-column prop="jobId" label="岗位ID" width="100" />
       <el-table-column prop="interviewType" label="面试类型" width="120" />
-      <el-table-column prop="difficulty" label="难度" width="100" />
+      <el-table-column prop="difficulty" label="难度" width="100">
+        <template #default="{ row }">
+          {{ difficultyLabel[row.difficulty] || row.difficulty }}
+        </template>
+      </el-table-column>
       <el-table-column prop="status" label="状态">
         <template #default="{ row }">
           <el-tag :type="row.status === 'COMPLETED' ? 'success' : 'warning'">
@@ -50,6 +54,9 @@ const sessions = ref<any[]>([])
 const page = ref(1)
 const pageSize = ref(10)
 const total = ref(0)
+const difficultyLabel: Record<string, string> = {
+  junior: '初级', medium: '中级', senior: '高级'
+}
 
 onMounted(() => {
   loadHistory()

@@ -59,6 +59,18 @@ public class InterviewQuestionServiceImpl extends ServiceImpl<InterviewQuestionM
                 .eq(InterviewQuestion::getSessionId, sessionId));
         if (currentCount >= session.getQuestionLimit()) return null;
 
+        // 幂等：若 lastQuestionId 之后已有题目（重试场景），直接返回下一道已有题，不再调用 LLM 重复生成
+        if (lastQuestionId != null) {
+            InterviewQuestion afterLast = getOne(new LambdaQueryWrapper<InterviewQuestion>()
+                    .eq(InterviewQuestion::getSessionId, sessionId)
+                    .gt(InterviewQuestion::getId, lastQuestionId)
+                    .orderByAsc(InterviewQuestion::getId)
+                    .last("LIMIT 1"));
+            if (afterLast != null) {
+                return afterLast;
+            }
+        }
+
         // Build resume context
         String resumeContext = "";
         if (session.getResumeId() != null) {

@@ -1,5 +1,5 @@
 ﻿<script setup lang="ts">
-import { ref, onMounted } from 'vue'
+import { ref, nextTick, onMounted } from 'vue'
 import { useRouter } from 'vue-router'
 import { interviewApi } from '@/api/interview'
 import { useUserStore } from '@/stores/user'
@@ -28,6 +28,7 @@ onMounted(async () => {
     const json = await res.json()
     if (json.code === 0 && json.data?.trends?.length > 0) {
       trends.value = json.data.trends
+      await nextTick()
       initTrendChart()
     }
   } catch (e) { /* ignore */ }
@@ -42,7 +43,7 @@ function initTrendChart() {
   const dates = trends.value.map(t => t.date)
   trendChart.setOption({
     tooltip: { trigger: 'axis' },
-    legend: { data: ['总分', '专业能力', '逻辑能力', '表达��力'], bottom: 0 },
+    legend: { data: ['总分', '专业能力', '逻辑能力', '表达能力'], bottom: 0 },
     xAxis: { type: 'category', data: dates },
     yAxis: { type: 'value', min: 0, max: 100 },
     series: [

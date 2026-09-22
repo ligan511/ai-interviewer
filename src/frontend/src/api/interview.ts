@@ -89,7 +89,7 @@ export const interviewApi = {
     return api.post<any, { code: number; data: NextQuestionResponse; message: string }>(
       `/interviews/${sessionId}/questions/next`,
       undefined,
-      { params: lastQuestionId ? { lastQuestionId } : {} }
+      { params: lastQuestionId ? { lastQuestionId } : {}, timeout: 150000 }
     )
   },
   submitAnswer(sessionId: number, data: SubmitAnswerRequest) {
@@ -109,7 +109,7 @@ export const interviewApi = {
     formData.append('audio', audioBlob, 'recording.webm')
     formData.append('questionId', String(questionId))
     return api.post<any, { code: number; data: any; message: string }>(
-      `/interviews/${sessionId}/answers/audio`, formData, { headers: { 'Content-Type': 'multipart/form-data' } }
+      `/interviews/${sessionId}/answers/audio`, formData
     )
   }
 }

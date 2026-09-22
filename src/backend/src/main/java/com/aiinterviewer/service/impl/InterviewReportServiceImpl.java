@@ -97,20 +97,30 @@ public class InterviewReportServiceImpl extends ServiceImpl<InterviewReportMappe
         report.setSessionId(sessionId);
         report.setOverallScore(BigDecimal.valueOf(round(avgScore)));
         report.setDimensionScores(dimensionScores);
-        report.setSummary(buildSummary(avgScore, questions.size()));
+        String summary = buildSummary(avgScore, questions.size());
+        // 若所有评分均为兜底结果（总分全为 0），在摘要中追加提示
+        if (count > 0 && totalScore == 0) {
+            summary += " 注意：本次面试的 AI 评分服务不可用，所有评分均为系统兜底结果，仅供参考。";
+        }
+        report.setSummary(summary);
         report.setStrengths(distinctAll(allStrengths));
         report.setWeaknesses(distinctAll(allWeaknesses));
         report.setSuggestions(distinctAll(allSuggestions));
         report.setCreatedAt(LocalDateTime.now());
-
+        // 幂等替换：同一 session 的报告可被多次重新生成（评分完成后数据更全），先删除旧报告再插入
+        this.remove(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<InterviewReport>()
+                .eq(InterviewReport::getSessionId, sessionId));
         save(report);
         return report;
     }
 
     @Override
     public InterviewReport getReport(Long sessionId) {
-        return getOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<InterviewReport>()
-                .eq(InterviewReport::getSessionId, sessionId));
+        // 取最新一条（generateReport 为幂等替换，正常只有一条；防御性取最新）
+        List<InterviewReport> list = list(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<InterviewReport>()
+                .eq(InterviewReport::getSessionId, sessionId)
+                .orderByDesc(InterviewReport::getId));
+        return list.isEmpty() ? null : list.get(0);
     }
 
     @Override

@@ -48,10 +48,10 @@ public class KnowledgeServiceImpl extends ServiceImpl<KnowledgeDocumentMapper, K
                 ext = file.getOriginalFilename().substring(file.getOriginalFilename().lastIndexOf("."));
             }
             String safeName = UUID.randomUUID().toString() + ext;
-            Path dir = Paths.get(uploadDir, "knowledge");
+            Path dir = Paths.get(uploadDir, "knowledge").toAbsolutePath().normalize();
             Files.createDirectories(dir);
             Path path = dir.resolve(safeName);
-            file.transferTo(path.toFile());
+            file.transferTo(path);
 
             KnowledgeDocument doc = new KnowledgeDocument();
             doc.setJobId(jobId);

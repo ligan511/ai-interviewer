@@ -5,7 +5,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.List;
 
-@TableName("answer_evaluation")
+@TableName(value = "answer_evaluation", autoResultMap = true)
 public class AnswerEvaluation {
     @TableId(type = IdType.AUTO)
     private Long id;

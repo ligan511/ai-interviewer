@@ -16,7 +16,8 @@ public class ReportController {
 
     @GetMapping("/interviews/{sessionId}/report")
     public ApiResponse<?> getReport(@PathVariable Long sessionId) {
-        var report = reportService.getReport(sessionId);
+        // 始终按需重新生成，保证报告反映最新的评分数据（评分为异步，可能存在滞后）
+        var report = reportService.generateReport(sessionId);
         if (report == null) {
             return ApiResponse.notFound();
         }

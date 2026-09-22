@@ -4,24 +4,20 @@ import com.aiinterviewer.common.ApiResponse;
 import com.aiinterviewer.common.SecurityContext;
 import com.aiinterviewer.controller.dto.CreateInterviewRequest;
 import com.aiinterviewer.entity.InterviewSession;
-import com.aiinterviewer.service.InterviewReportService;
 import com.aiinterviewer.service.InterviewSessionService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
-import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
 
-@Slf4j
 @RestController
 @RequestMapping("/api/v1/interviews")
 @RequiredArgsConstructor
 public class InterviewController {
 
     private final InterviewSessionService sessionService;
-    private final InterviewReportService reportService;
     private final SecurityContext securityContext;
 
     @PostMapping
@@ -56,12 +52,8 @@ public class InterviewController {
     public ApiResponse<Map<String, Object>> complete(@PathVariable Long id, Authentication auth) {
         Long userId = resolveUserId(auth);
         InterviewSession session = sessionService.completeSession(id, userId);
-        // Generate report after completion
-        try {
-            reportService.generateReport(id);
-        } catch (Exception e) {
-            log.warn("Report generation failed: {}", e.getMessage());
-        }
+        // 报告由异步评分完成时自动触发生成（见 InterviewAnswerServiceImpl.maybeGenerateReport），
+        // 前端查看报告时若尚未生成会按需补生成（见 ReportController.getReport）
         return ApiResponse.ok(Map.of(
                 "sessionId", session.getId(),
                 "status", session.getStatus()

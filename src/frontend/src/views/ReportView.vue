@@ -13,29 +13,32 @@
       <div ref="chartRef" style="width: 100%; height: 300px; margin-bottom: 20px"></div>
 
       <h3>综合评价</h3>
-      <p style="line-height: 1.8; color: #606266">{{ report.summary }}</p>
+      <p style="line-height: 1.8; color: #606266">{{ report.summary || '暂无评价内容' }}</p>
 
       <el-row :gutter="20" style="margin-top: 20px">
         <el-col :span="12">
           <el-card shadow="never" header="优势">
-            <ul>
-              <li v-for="s in report.strengths" :key="s" style="margin: 6px 0; color: #67c23a">{{ s }}</li>
+            <ul v-if="report.strengths && report.strengths.length > 0">
+              <li v-for="(s, i) in report.strengths" :key="i" style="margin: 6px 0; color: #67c23a">{{ s }}</li>
             </ul>
+            <el-empty v-else description="暂无优势记录" :image-size="60" />
           </el-card>
         </el-col>
         <el-col :span="12">
           <el-card shadow="never" header="待改进">
-            <ul>
-              <li v-for="w in report.weaknesses" :key="w" style="margin: 6px 0; color: #f56c6c">{{ w }}</li>
+            <ul v-if="report.weaknesses && report.weaknesses.length > 0">
+              <li v-for="(w, i) in report.weaknesses" :key="i" style="margin: 6px 0; color: #f56c6c">{{ w }}</li>
             </ul>
+            <el-empty v-else description="暂无待改进项" :image-size="60" />
           </el-card>
         </el-col>
       </el-row>
 
       <el-card style="margin-top: 20px" header="改进建议">
-        <ul>
-          <li v-for="s in report.suggestions" :key="s" style="margin: 6px 0; color: #606266">{{ s }}</li>
+        <ul v-if="report.suggestions && report.suggestions.length > 0">
+          <li v-for="(s, i) in report.suggestions" :key="i" style="margin: 6px 0; color: #606266">{{ s }}</li>
         </ul>
+        <el-empty v-else description="暂无改进建议" :image-size="60" />
       </el-card>
     </el-card>
 
@@ -44,7 +47,7 @@
 </template>
 
 <script setup lang="ts">
-import { ref, onMounted, onUnmounted } from 'vue'
+import { ref, nextTick, onMounted, onUnmounted } from 'vue'
 import { useRouter, useRoute } from 'vue-router'
 import * as echarts from 'echarts'
 import { interviewApi } from '@/api/interview'
@@ -63,6 +66,7 @@ onMounted(async () => {
     const res = await interviewApi.getReport(sessionId)
     if (res.code === 0) {
       report.value = res.data
+      await nextTick()
       initChart()
     }
   } catch (e) {

@@ -3,7 +3,7 @@ package com.aiinterviewer.entity;
 import com.baomidou.mybatisplus.annotation.*;
 import java.time.LocalDateTime;
 
-@TableName("interview_report")
+@TableName(value = "interview_report", autoResultMap = true)
 public class InterviewReport {
     @TableId(type = IdType.AUTO)
     private Long id;

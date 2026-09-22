@@ -58,14 +58,15 @@ public class AnswerController {
                 ext = audioFile.getOriginalFilename().substring(audioFile.getOriginalFilename().lastIndexOf("."));
             }
             String safeName = UUID.randomUUID().toString() + ext;
-            Path dir = Paths.get(uploadDir, "audios");
+            // MultipartFile.transferTo(Path) 基于 Tomcat 临时工作目录解析相对路径，必须用绝对路径
+            Path dir = Paths.get(uploadDir, "audios").toAbsolutePath().normalize();
             Files.createDirectories(dir);
             Path path = dir.resolve(safeName);
-            audioFile.transferTo(path.toFile());
+            audioFile.transferTo(path);
 
             // Store audio URL in DB via the answer service
             // We reuse submitAnswer but set audioUrl separately
-            var result = answerService.submitAnswerWithAudio(sessionId, userId, questionId, null, null, "/uploads/audios/" + safeName);
+            var result = answerService.submitAnswerWithAudio(sessionId, userId, questionId, "", null, "/uploads/audios/" + safeName);
             return ApiResponse.ok(Map.of(
                     "answerId", result.get("answerId"),
                     "evaluationStatus", result.get("evaluationStatus"),

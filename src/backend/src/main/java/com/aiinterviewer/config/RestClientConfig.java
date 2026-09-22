@@ -23,7 +23,7 @@ public class RestClientConfig {
     public RestTemplate restTemplate() {
         SimpleClientHttpRequestFactory factory = new SimpleClientHttpRequestFactory();
         factory.setConnectTimeout(10000);
-        factory.setReadTimeout(55000);
+        factory.setReadTimeout(120000);
         RestTemplate restTemplate = new RestTemplate(factory);
         // 统一为所有指向 AI service 的 /internal/ai/* 请求添加鉴权头
         ClientHttpRequestInterceptor authInterceptor = (HttpRequest request, byte[] body,

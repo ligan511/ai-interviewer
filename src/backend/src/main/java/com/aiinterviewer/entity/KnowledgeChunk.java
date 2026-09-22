@@ -3,7 +3,7 @@ package com.aiinterviewer.entity;
 import com.baomidou.mybatisplus.annotation.*;
 import java.time.LocalDateTime;
 
-@TableName("knowledge_chunk")
+@TableName(value = "knowledge_chunk", autoResultMap = true)
 public class KnowledgeChunk {
     @TableId(type = IdType.AUTO)
     private Long id;
