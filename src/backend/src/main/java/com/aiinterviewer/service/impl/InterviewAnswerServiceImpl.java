@@ -16,6 +16,7 @@ import org.springframework.web.client.RestTemplate;
 import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
+import java.util.concurrent.Executor;
 
 @Slf4j
 @Service
@@ -27,8 +28,10 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
     private final AnswerEvaluationMapper evaluationMapper;
     private final InterviewQuestionMapper questionMapper;
     private final InterviewSessionMapper sessionMapper;
+    private final UserResumeMapper userResumeMapper;
     private final InterviewReportService reportService;
     private final RestTemplate restTemplate;
+    private final Executor aiTaskExecutor;
 
     @Value("${ai.service.base-url}")
     private String aiServiceUrl;
@@ -87,12 +90,32 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
     }
 
     private void evaluateAnswerAsync(Long answerId, Long questionId, String answerText, InterviewSession session) {
-        new Thread(() -> {
+        // 使用线程池替代裸 new Thread，避免无限制创建线程、便于资源管控
+        aiTaskExecutor.execute(() -> {
             try {
                 InterviewQuestion question = questionMapper.selectById(questionId);
                 if (question == null) return;
 
-                Map<String, Object> evalResult = callAiEvaluate(question.getContent(), answerText, session.getJobId(), session.getDifficulty());
+                // 构建简历上下文：从 session.resumeId 读取并解析为文本
+                String resumeContext = "";
+                if (session.getResumeId() != null) {
+                    try {
+                        var resume = userResumeMapper.selectById(session.getResumeId());
+                        if (resume != null && resume.getParsedJson() != null) {
+                            java.util.Map<String, Object> parsed = resume.getParsedJson();
+                            StringBuilder sb = new StringBuilder();
+                            if (parsed.get("summary") != null) sb.append("个人简介: ").append(parsed.get("summary")).append("\n");
+                            if (parsed.get("skills") != null) sb.append("技能: ").append(parsed.get("skills")).append("\n");
+                            if (parsed.get("experience") != null) sb.append("工作经历: ").append(parsed.get("experience")).append("\n");
+                            if (parsed.get("projects") != null) sb.append("项目经历: ").append(parsed.get("projects")).append("\n");
+                            resumeContext = sb.toString();
+                        }
+                    } catch (Exception e) {
+                        log.debug("Failed to load resume context: {}", e.getMessage());
+                    }
+                }
+
+                Map<String, Object> evalResult = callAiEvaluate(question.getContent(), answerText, session.getJobId(), session.getDifficulty(), resumeContext);
 
                 AnswerEvaluation evaluation = new AnswerEvaluation();
                 evaluation.setAnswerId(answerId);
@@ -126,28 +149,35 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
                 log.info("Answer {} evaluated with total score: {}", answerId, evaluation.getTotalScore());
             } catch (Exception e) {
                 log.error("Failed to evaluate answer: {}", e.getMessage());
-                AnswerEvaluation evaluation = new AnswerEvaluation();
-                evaluation.setAnswerId(answerId);
-                evaluation.setTotalScore(BigDecimal.valueOf(0));
-                evaluation.setProfessionalScore(BigDecimal.valueOf(0));
-                evaluation.setLogicScore(BigDecimal.valueOf(0));
-                evaluation.setCompletenessScore(BigDecimal.valueOf(0));
-                evaluation.setAnalysisScore(BigDecimal.valueOf(0));
-                evaluation.setExpressionScore(BigDecimal.valueOf(0));
-                evaluation.setJobMatchScore(BigDecimal.valueOf(0));
-                evaluation.setReferenceAnswer("");
-                evaluation.setCreatedAt(LocalDateTime.now());
-                evaluationMapper.insert(evaluation);
+                // 失败时标记为 EVALUATION_FAILED，避免答案永久卡在 SUBMITTED
+                try {
+                    AnswerEvaluation evaluation = new AnswerEvaluation();
+                    evaluation.setAnswerId(answerId);
+                    evaluation.setTotalScore(BigDecimal.valueOf(0));
+                    evaluation.setProfessionalScore(BigDecimal.valueOf(0));
+                    evaluation.setLogicScore(BigDecimal.valueOf(0));
+                    evaluation.setCompletenessScore(BigDecimal.valueOf(0));
+                    evaluation.setAnalysisScore(BigDecimal.valueOf(0));
+                    evaluation.setExpressionScore(BigDecimal.valueOf(0));
+                    evaluation.setJobMatchScore(BigDecimal.valueOf(0));
+                    evaluation.setReferenceAnswer("评分失败，请重新提交答案");
+                    evaluation.setCreatedAt(LocalDateTime.now());
+                    evaluationMapper.insert(evaluation);
+
+                    InterviewAnswer answer = answerMapper.selectById(answerId);
+                    if (answer != null) {
+                        answer.setStatus("EVALUATION_FAILED");
+                        answerMapper.updateById(answer);
+                    }
+                } catch (Exception inner) {
+                    log.error("Failed to mark answer {} as EVALUATION_FAILED: {}", answerId, inner.getMessage());
+                }
             }
-        }).start();
+        });
     }
 
-    private Map<String, Object> callAiEvaluate(String question, String answer, Long jobId, String difficulty) {
-        // Build resume context
-        String resumeContext = "";
-        // We don't have sessionId here directly, but we can get it from the answer's question's session
-        // For now, keep it simple - just pass what we have
-
+    private Map<String, Object> callAiEvaluate(String question, String answer, Long jobId, String difficulty,
+                                               String resumeContext) {
         // Build knowledge context by calling retrieve endpoint
         String knowledgeContext = "";
         try {
@@ -155,11 +185,28 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
             retrieveBody.put("question", question);
             retrieveBody.put("answer", answer);
             retrieveBody.put("job_skills", Collections.emptyList());
-            HttpHeaders headers = new HttpHeaders();
-            headers.setContentType(MediaType.APPLICATION_JSON);
-            HttpEntity<Map<String, Object>> entity = new HttpEntity<>(retrieveBody, headers);
-            restTemplate.postForEntity(aiServiceUrl + "/internal/ai/knowledge/retrieve", entity, Map.class);
-            // Knowledge retrieval is best-effort, ignore errors
+            HttpHeaders retrieveHeaders = new HttpHeaders();
+            retrieveHeaders.setContentType(MediaType.APPLICATION_JSON);
+            HttpEntity<Map<String, Object>> retrieveEntity = new HttpEntity<>(retrieveBody, retrieveHeaders);
+            ResponseEntity<Map> retrieveResp = restTemplate.postForEntity(
+                    aiServiceUrl + "/internal/ai/knowledge/retrieve", retrieveEntity, Map.class);
+            // 修复 RAG 链路：读取 retrieve 返回值，提取 top chunks 文本作为上下文
+            if (retrieveResp.getStatusCode().is2xxSuccessful() && retrieveResp.getBody() != null) {
+                Object chunksObj = retrieveResp.getBody().get("chunks");
+                if (chunksObj instanceof List) {
+                    List<?> chunks = (List<?>) chunksObj;
+                    if (!chunks.isEmpty()) {
+                        StringBuilder sb = new StringBuilder();
+                        for (Object chunk : chunks) {
+                            if (chunk instanceof Map) {
+                                Object content = ((Map<?, ?>) chunk).get("content");
+                                if (content != null) sb.append(content.toString()).append("\n");
+                            }
+                        }
+                        if (sb.length() > 0) knowledgeContext = sb.toString();
+                    }
+                }
+            }
         } catch (Exception e) {
             log.debug("Knowledge retrieval failed: {}", e.getMessage());
         }
@@ -169,7 +216,7 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
         requestBody.put("answer", answer);
         requestBody.put("jobId", jobId);
         requestBody.put("difficulty", difficulty);
-        requestBody.put("resumeContext", resumeContext);
+        requestBody.put("resumeContext", resumeContext == null ? "" : resumeContext);
         requestBody.put("knowledgeContext", knowledgeContext);
 
         HttpHeaders headers = new HttpHeaders();

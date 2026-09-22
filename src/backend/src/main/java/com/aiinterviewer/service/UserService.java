@@ -1,38 +1,36 @@
 package com.aiinterviewer.service;
 
 import com.aiinterviewer.entity.User;
+import com.aiinterviewer.mapper.UserMapper;
 import com.aiinterviewer.security.JwtService;
-import com.aiinterviewer.security.UserDetailsServiceImpl;
+import com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper;
+import lombok.RequiredArgsConstructor;
+import org.springframework.security.core.authority.SimpleGrantedAuthority;
 import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.security.crypto.password.PasswordEncoder;
 import org.springframework.stereotype.Service;
 
 import java.util.HashMap;
+import java.util.List;
 import java.util.Map;
 
+/**
+ * 用户服务：注册、登录、加载用户详情。
+ * 注意：本类直接用 UserMapper 构造 UserDetails，不再注入 UserDetailsServiceImpl，
+ * 避免与 SecurityConfig / JwtAuthFilter 形成循环依赖。
+ */
 @Service
+@RequiredArgsConstructor
 public class UserService {
 
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final UserMapper userMapper;
     private final PasswordEncoder passwordEncoder;
     private final JwtService jwtService;
-    private final UserDetailsServiceImpl userDetailsService;
-
-    public UserService(com.aiinterviewer.mapper.UserMapper userMapper,
-                       PasswordEncoder passwordEncoder,
-                       JwtService jwtService,
-                       UserDetailsServiceImpl userDetailsService) {
-        this.userMapper = userMapper;
-        this.passwordEncoder = passwordEncoder;
-        this.jwtService = jwtService;
-        this.userDetailsService = userDetailsService;
-    }
 
     public User register(String username, String email, String password) {
         if (userMapper.selectOne(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
-                .eq(User::getEmail, email)) != null) {
-            throw new RuntimeException("Email already registered");
+            new LambdaQueryWrapper<User>().eq(User::getEmail, email)) != null) {
+            throw new RuntimeException("该邮箱已被注册");
         }
         User user = new User();
         user.setUsername(username);
@@ -45,16 +43,15 @@ public class UserService {
 
     public Map<String, Object> login(String email, String password) {
         User user = userMapper.selectOne(
-            new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
-                .eq(User::getEmail, email)
-        );
+            new LambdaQueryWrapper<User>().eq(User::getEmail, email));
         if (user == null || !passwordEncoder.matches(password, user.getPasswordHash())) {
-            throw new RuntimeException("Invalid email or password");
+            throw new RuntimeException("邮箱或密码错误");
         }
         if (user.getStatus() != 1) {
-            throw new RuntimeException("Account is disabled");
+            throw new RuntimeException("账号已被禁用");
         }
-        UserDetails userDetails = userDetailsService.loadUserByEmail(email);
+        // 直接基于查询到的 User 实体构造 UserDetails，避免重复查询数据库
+        UserDetails userDetails = toUserDetails(user);
         String jwt = jwtService.generateToken(userDetails);
 
         Map<String, Object> result = new HashMap<>();
@@ -65,7 +62,25 @@ public class UserService {
         return result;
     }
 
+    /**
+     * 根据邮箱加载 UserDetails（供 JwtAuthFilter 使用）。
+     * 直接查库构造，不依赖 UserDetailsServiceImpl，打破循环依赖。
+     */
     public UserDetails loadUserByEmail(String email) {
-        return userDetailsService.loadUserByEmail(email);
+        User user = userMapper.selectOne(
+            new LambdaQueryWrapper<User>().eq(User::getEmail, email));
+        if (user == null) {
+            return null;
+        }
+        return toUserDetails(user);
+    }
+
+    private UserDetails toUserDetails(User user) {
+        // 使用全限定名，避免与 com.aiinterviewer.entity.User 同名冲突
+        return org.springframework.security.core.userdetails.User
+                .withUsername(user.getEmail())
+                .password(user.getPasswordHash())
+                .authorities(List.of(new SimpleGrantedAuthority("ROLE_USER")))
+                .build();
     }
 }

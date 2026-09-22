@@ -33,7 +33,7 @@ public class JobController {
     public ApiResponse<JobDetailVO> detail(@PathVariable Long id) {
         Job job = jobMapper.selectById(id);
         if (job == null) {
-            return ApiResponse.NotFound();
+            return ApiResponse.notFound();
         }
         List<JobSkill> skills = jobSkillMapper.selectList(
                 new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<JobSkill>()

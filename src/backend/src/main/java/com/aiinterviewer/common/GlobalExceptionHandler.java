@@ -13,18 +13,36 @@ public class GlobalExceptionHandler {
     @ExceptionHandler(AccessDeniedException.class)
     public ApiResponse<Void> handleAccessDenied(AccessDeniedException e) {
         log.error("Access denied: {}", e.getMessage());
-        return ApiResponse.Forbidden();
+        return ApiResponse.forbidden();
     }
 
     @ExceptionHandler(MultipartException.class)
     public ApiResponse<Void> handleMultipart(MultipartException e) {
         log.error("Multipart error: {}", e.getMessage());
-        return ApiResponse.error(400, e.getMessage());
+        // 限制文件大小/类型错误仅返回通用提示，不暴露内部细节
+        String message = e.getMessage();
+        if (message != null && message.contains("size")) {
+            return ApiResponse.error(400, "上传文件过大，请压缩后重试");
+        }
+        return ApiResponse.error(400, "文件上传格式不正确");
+    }
+
+    @ExceptionHandler(IllegalArgumentException.class)
+    public ApiResponse<Void> handleIllegalArgument(IllegalArgumentException e) {
+        log.error("Invalid argument: {}", e.getMessage());
+        return ApiResponse.error(400, "请求参数错误");
+    }
+
+    @ExceptionHandler(RuntimeException.class)
+    public ApiResponse<Void> handleRuntime(RuntimeException e) {
+        log.error("Runtime error: {}", e.getMessage(), e);
+        return ApiResponse.error(500, "服务器内部错误，请稍后重试");
     }
 
     @ExceptionHandler(Exception.class)
     public ApiResponse<Void> handleException(Exception e) {
         log.error("Unexpected error: {}", e.getMessage(), e);
-        return ApiResponse.error(500, e.getMessage());
+        // 安全性修复：不向前端返回原始异常信息，防止泄漏 SQL/堆栈等敏感信息
+        return ApiResponse.error(500, "服务器内部错误，请稍后重试");
     }
 }

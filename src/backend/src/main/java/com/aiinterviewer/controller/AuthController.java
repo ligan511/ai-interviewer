@@ -17,6 +17,11 @@ public class AuthController {
 
     private final UserService userService;
 
+    @GetMapping("/health")
+    public ApiResponse<String> health() {
+        return ApiResponse.ok("ok");
+    }
+
     @PostMapping("/register")
     public ApiResponse<Map<String, Object>> register(@Valid @RequestBody RegisterRequest request) {
         try {

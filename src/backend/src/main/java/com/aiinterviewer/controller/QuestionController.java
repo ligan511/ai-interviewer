@@ -1,10 +1,10 @@
 package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
+import com.aiinterviewer.common.SecurityContext;
 import com.aiinterviewer.service.InterviewQuestionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.HashMap;
@@ -16,7 +16,7 @@ import java.util.Map;
 public class QuestionController {
 
     private final InterviewQuestionService questionService;
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final SecurityContext securityContext;
 
     @PostMapping("/next")
     public ApiResponse<Map<String, Object>> nextQuestion(@PathVariable Long sessionId,
@@ -46,12 +46,6 @@ public class QuestionController {
     }
 
     private Long resolveUserId(Authentication auth) {
-        String email = ((UserDetails) auth.getPrincipal()).getUsername();
-        var user = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.aiinterviewer.entity.User>()
-                .eq(com.aiinterviewer.entity.User::getEmail, email));
-        if (user == null) {
-            throw new RuntimeException("User not found");
-        }
-        return user.getId();
+        return securityContext.resolveUserId(auth);
     }
 }

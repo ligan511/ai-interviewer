@@ -2,6 +2,7 @@ from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse
 from pydantic import BaseModel
 from typing import Optional, List, Dict, Any
+from starlette.middleware.base import BaseHTTPMiddleware
 import json
 import os
 import hashlib
@@ -22,9 +23,81 @@ EMBEDDING_MODEL   = os.getenv("EMBEDDING_MODEL",    "BAAI/bge-m3")
 EMBEDDING_API_URL = os.getenv("EMBEDDING_API_URL",  "https://api.siliconflow.cn/v1/embeddings")
 DASHSCOPE_KEY     = os.getenv("DASHSCOPE_API_KEY",  "")
 
+# ── 内部接口鉴权 Key ──────────────────────────────────────────────────────
+# 后端调用 /internal/ai/* 接口需在请求头携带 X-AI-Internal-Key
+AI_INTERNAL_KEY   = os.getenv("AI_INTERNAL_KEY",    "")
+
+
+# ── 鉴权中间件：保护 /internal/ai/* 接口 ─────────────────────────────────
+# 当 AI_INTERNAL_KEY 未配置（空字符串）时，中间件不做鉴权（仅适用于本地开发）
+# 生产环境必须配置 AI_INTERNAL_KEY，否则 /internal/ai/* 接口无保护
+@app.middleware("http")
+async def verify_internal_key(request: Request, call_next):
+    # 仅保护内部接口，其他路径放行（健康检查等）
+    if request.url.path.startswith("/internal/ai/"):
+        # 未配置 key 时跳过鉴权（开发模式）
+        if AI_INTERNAL_KEY:
+            provided_key = request.headers.get("X-AI-Internal-Key", "")
+            if not provided_key or provided_key != AI_INTERNAL_KEY:
+                return JSONResponse(
+                    status_code=401,
+                    content={"detail": "无效的内部接口凭据"}
+                )
+    response = await call_next(request)
+    return response
+
 # ── In-memory storage ─────────────────────────────────────────────────────
 question_history: Dict[int, List[Dict]] = {}
-knowledge_index: List[Dict[str, Any]] = []   # [{chunk, embedding, doc_id}]
+
+# ── 向量库持久化（SQLite + numpy）─────────────────────────────────────
+# 将文档 embedding 持久化到本地 SQLite，避免重启即丢。
+# 检索时一次性加载到内存（百条级别足够），新写入时同步落盘。
+import sqlite3
+import json as _json
+import os as _os
+
+_VECTOR_DB_PATH = _os.getenv("VECTOR_DB_PATH", "./data/knowledge.db")
+_os.makedirs(_os.path.dirname(_VECTOR_DB_PATH) or ".", exist_ok=True)
+
+
+def _vector_db_conn() -> sqlite3.Connection:
+    conn = sqlite3.connect(_VECTOR_DB_PATH)
+    conn.execute("PRAGMA journal_mode=WAL")
+    conn.execute(
+        """
+        CREATE TABLE IF NOT EXISTS knowledge_chunk (
+            id INTEGER PRIMARY KEY AUTOINCREMENT,
+            doc_id INTEGER NOT NULL,
+            chunk TEXT NOT NULL,
+            embedding TEXT NOT NULL,
+            created_at TIMESTAMP DEFAULT CURRENT_TIMESTAMP
+        )
+        """
+    )
+    conn.commit()
+    return conn
+
+
+def _load_all_chunks() -> List[Dict[str, Any]]:
+    """启动时/按需从 SQLite 加载所有 chunks 到内存"""
+    conn = _vector_db_conn()
+    try:
+        rows = conn.execute(
+            "SELECT doc_id, chunk, embedding FROM knowledge_chunk"
+        ).fetchall()
+    finally:
+        conn.close()
+    result = []
+    for doc_id, chunk, emb_json in rows:
+        try:
+            result.append({"doc_id": doc_id, "chunk": chunk, "embedding": _json.loads(emb_json)})
+        except Exception:
+            continue
+    return result
+
+
+# 进程级内存缓存（启动时加载，写操作同步落盘）
+knowledge_index: List[Dict[str, Any]] = _load_all_chunks()
 
 # ── LLM helper ─────────────────────────────────────────────────────────────
 def _parse_llm_json(text: str) -> dict | None:
@@ -37,6 +110,9 @@ def _parse_llm_json(text: str) -> dict | None:
         cleaned = cleaned[3:]
         if cleaned.startswith("json"):
             cleaned = cleaned[4:]
+    # 去掉结尾的 ``` 包裹（如有）
+    if cleaned.endswith("```"):
+        cleaned = cleaned[:-3]
     cleaned = cleaned.strip()
     try:
         return json.loads(cleaned)
@@ -204,12 +280,20 @@ class KnowledgeRetrieveRequest(BaseModel):
 
 class KnowledgeEmbedRequest(BaseModel):
     content: str
+    doc_id: int = 0
+    chunk_size: int = 500
 
 class VoiceTranscribeRequest(BaseModel):
     audio_url: str
 
 
 # ── Endpoints ───────────────────────────────────────────────────────────────
+
+@app.get("/health")
+async def health():
+    """健康检查接口，供 Docker / K8s healthcheck 使用，无需鉴权"""
+    return {"status": "ok", "service": "ai-interviewer-ai-service"}
+
 
 @app.post("/internal/ai/question/generate")
 async def generate_question(req: QuestionGenerateRequest):
@@ -327,7 +411,8 @@ async def followup_question(req: dict):
             parsed = _parse_llm_json(llm_result)
             if parsed:
                 return JSONResponse(content=parsed)
-        except: pass
+        except json.JSONDecodeError:
+            pass
     return JSONResponse(content={
         "content": "请结合实际项目经验，详细说明你在上述场景中遇到的具体问题和解决方案。",
         "type": "followup",
@@ -466,7 +551,8 @@ async def parse_resume(req: ResumeParseRequest):
             parsed = _parse_llm_json(llm_result)
             if parsed:
                 return JSONResponse(content=parsed)
-        except: pass
+        except json.JSONDecodeError:
+            pass
 
     return JSONResponse(content={
         "education": [{"degree": "本科", "school": "示例大学", "major": "计算机科学"}],
@@ -491,9 +577,37 @@ async def retrieve_knowledge(req: KnowledgeRetrieveRequest):
 
 @app.post("/internal/ai/knowledge/embed")
 async def embed_knowledge(req: KnowledgeEmbedRequest):
-    """文档 Embedding（P1）"""
-    embedding = call_embedding(req.content)
-    return JSONResponse(content={"embedding": embedding, "length": len(embedding)})
+    """文档 Embedding：切片、生成向量、落盘到 SQLite + 内存索引"""
+    if not req.content or not req.content.strip():
+        return JSONResponse(content={"status": "error", "message": "content is empty"}, status_code=400)
+
+    # 按字符切片（简单稳健，对中文友好）
+    text = req.content.strip()
+    chunks = [text[i:i + req.chunk_size] for i in range(0, len(text), req.chunk_size)]
+    if not chunks:
+        chunks = [text]
+
+    conn = _vector_db_conn()
+    inserted = 0
+    try:
+        for chunk in chunks:
+            embedding = call_embedding(chunk)
+            if not embedding:
+                continue
+            conn.execute(
+                "INSERT INTO knowledge_chunk (doc_id, chunk, embedding) VALUES (?, ?, ?)",
+                (req.doc_id, chunk, _json.dumps(embedding)),
+            )
+            knowledge_index.append({"doc_id": req.doc_id, "chunk": chunk, "embedding": embedding})
+            inserted += 1
+        conn.commit()
+    finally:
+        conn.close()
+    return JSONResponse(content={
+        "status": "success",
+        "chunks_inserted": inserted,
+        "total_in_index": len(knowledge_index),
+    })
 
 
 @app.post("/internal/ai/voice/transcribe")

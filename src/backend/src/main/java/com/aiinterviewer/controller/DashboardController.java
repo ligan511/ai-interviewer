@@ -1,10 +1,10 @@
 package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
+import com.aiinterviewer.common.SecurityContext;
 import com.aiinterviewer.entity.*;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.*;
@@ -14,7 +14,7 @@ import java.util.*;
 @RequiredArgsConstructor
 public class DashboardController {
 
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final SecurityContext securityContext;
     private final com.aiinterviewer.mapper.InterviewSessionMapper sessionMapper;
     private final com.aiinterviewer.mapper.InterviewQuestionMapper questionMapper;
     private final com.aiinterviewer.mapper.InterviewAnswerMapper answerMapper;
@@ -81,10 +81,6 @@ public class DashboardController {
     }
 
     private Long resolveUserId(Authentication auth) {
-        String email = ((UserDetails) auth.getPrincipal()).getUsername();
-        var user = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<User>()
-                .eq(User::getEmail, email));
-        if (user == null) throw new RuntimeException("User not found");
-        return user.getId();
+        return securityContext.resolveUserId(auth);
     }
 }

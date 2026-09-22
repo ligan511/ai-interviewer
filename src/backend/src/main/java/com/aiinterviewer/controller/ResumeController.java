@@ -1,11 +1,12 @@
 package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
+import com.aiinterviewer.common.FileUploadValidator;
+import com.aiinterviewer.common.SecurityContext;
 import com.aiinterviewer.entity.UserResume;
 import com.aiinterviewer.service.ResumeService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -18,7 +19,7 @@ import java.util.Map;
 public class ResumeController {
 
     private final ResumeService resumeService;
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final SecurityContext securityContext;
 
     @PostMapping
     public ApiResponse<Map<String, Object>> upload(
@@ -26,6 +27,8 @@ public class ResumeController {
             @RequestParam(value = "fileName", required = false) String fileName,
             Authentication auth) {
         Long userId = resolveUserId(auth);
+        // 安全校验：扩展名白名单 + MIME 黑名单 + 大小限制
+        FileUploadValidator.validateResume(file);
         UserResume resume = resumeService.upload(file, userId, fileName);
         return ApiResponse.ok(Map.of(
                 "id", resume.getId(),
@@ -45,7 +48,7 @@ public class ResumeController {
     public ApiResponse<UserResume> get(@PathVariable Long id, Authentication auth) {
         Long userId = resolveUserId(auth);
         UserResume resume = resumeService.get(id, userId);
-        if (resume == null) return ApiResponse.NotFound();
+        if (resume == null) return ApiResponse.notFound();
         return ApiResponse.ok(resume);
     }
 
@@ -57,10 +60,6 @@ public class ResumeController {
     }
 
     private Long resolveUserId(Authentication auth) {
-        String email = ((UserDetails) auth.getPrincipal()).getUsername();
-        var user = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.aiinterviewer.entity.User>()
-                .eq(com.aiinterviewer.entity.User::getEmail, email));
-        if (user == null) throw new RuntimeException("User not found");
-        return user.getId();
+        return securityContext.resolveUserId(auth);
     }
 }

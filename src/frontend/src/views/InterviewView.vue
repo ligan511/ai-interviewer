@@ -157,10 +157,13 @@ async function startRecording() {
     recorder.start()
     mediaRecorder.value = recorder
     isRecording.value = true
+    // 标记本次回答使用语音模式，提交时会走音频上传分支
+    useVoice.value = true
     recordingTime.value = 0
     recordTimer.value = setInterval(() => { recordingTime.value++ }, 1000)
   } catch (e) {
     ElMessage.error('无法访问麦克风，请检查浏览器权限')
+    useVoice.value = false
   }
 }
 
@@ -171,6 +174,8 @@ function stopRecording() {
   }
   isRecording.value = false
   if (recordTimer.value) clearInterval(recordTimer.value)
+  // 若未采集到任何音频数据，回退到文字模式，避免提交空音频
+  if (audioChunks.value.length === 0) useVoice.value = false
 }
 
 function playRecording() {

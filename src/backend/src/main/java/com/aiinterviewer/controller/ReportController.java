@@ -18,7 +18,7 @@ public class ReportController {
     public ApiResponse<?> getReport(@PathVariable Long sessionId) {
         var report = reportService.getReport(sessionId);
         if (report == null) {
-            return ApiResponse.NotFound();
+            return ApiResponse.notFound();
         }
         return ApiResponse.ok(report);
     }
@@ -27,7 +27,7 @@ public class ReportController {
     public ApiResponse<?> getEvaluation(@PathVariable Long answerId) {
         var evaluation = reportService.getEvaluation(answerId);
         if (evaluation == null) {
-            return ApiResponse.NotFound();
+            return ApiResponse.notFound();
         }
         return ApiResponse.ok(evaluation);
     }

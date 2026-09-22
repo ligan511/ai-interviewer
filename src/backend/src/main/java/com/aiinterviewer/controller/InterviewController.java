@@ -10,7 +10,6 @@ import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 
 import java.util.Map;
@@ -23,7 +22,7 @@ public class InterviewController {
 
     private final InterviewSessionService sessionService;
     private final InterviewReportService reportService;
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final SecurityContext securityContext;
 
     @PostMapping
     public ApiResponse<Map<String, Object>> create(@Valid @RequestBody CreateInterviewRequest req,
@@ -48,7 +47,7 @@ public class InterviewController {
         Long userId = resolveUserId(auth);
         InterviewSession session = sessionService.getSession(id);
         if (session == null || !userId.equals(session.getUserId())) {
-            return ApiResponse.NotFound();
+            return ApiResponse.notFound();
         }
         return ApiResponse.ok(session);
     }
@@ -85,12 +84,6 @@ public class InterviewController {
     }
 
     private Long resolveUserId(Authentication auth) {
-        String email = ((UserDetails) auth.getPrincipal()).getUsername();
-        var user = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.aiinterviewer.entity.User>()
-                .eq(com.aiinterviewer.entity.User::getEmail, email));
-        if (user == null) {
-            throw new RuntimeException("User not found");
-        }
-        return user.getId();
+        return securityContext.resolveUserId(auth);
     }
 }

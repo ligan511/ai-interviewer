@@ -1,13 +1,14 @@
 package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
+import com.aiinterviewer.common.FileUploadValidator;
+import com.aiinterviewer.common.SecurityContext;
 import com.aiinterviewer.controller.dto.SubmitAnswerRequest;
 import com.aiinterviewer.service.InterviewAnswerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.security.core.Authentication;
-import org.springframework.security.core.userdetails.UserDetails;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
 
@@ -24,7 +25,7 @@ import java.util.UUID;
 public class AnswerController {
 
     private final InterviewAnswerService answerService;
-    private final com.aiinterviewer.mapper.UserMapper userMapper;
+    private final SecurityContext securityContext;
 
     @Value("${ai.upload.dir:./uploads}")
     private String uploadDir;
@@ -49,6 +50,8 @@ public class AnswerController {
                                                          @RequestParam("audio") MultipartFile audioFile,
                                                          Authentication auth) {
         Long userId = resolveUserId(auth);
+        // 安全校验：扩展名白名单 + MIME 黑名单 + 大小限制
+        FileUploadValidator.validateAudio(audioFile);
         try {
             String ext = "";
             if (audioFile.getOriginalFilename() != null && audioFile.getOriginalFilename().contains(".")) {
@@ -75,13 +78,7 @@ public class AnswerController {
     }
 
     private Long resolveUserId(Authentication auth) {
-        String email = ((UserDetails) auth.getPrincipal()).getUsername();
-        var user = userMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.aiinterviewer.entity.User>()
-                .eq(com.aiinterviewer.entity.User::getEmail, email));
-        if (user == null) {
-            throw new RuntimeException("User not found");
-        }
-        return user.getId();
+        return securityContext.resolveUserId(auth);
     }
 }
 

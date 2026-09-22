@@ -1,0 +1,5 @@
+package com.aiinterviewer.service;
+
+import com.aiinterviewer.entity.User as UserEntity; // 不能用 as，Java 不支持
+
+// 正确方案：完全不导入 Spring 的 User，全限定名使用

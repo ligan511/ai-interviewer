@@ -28,19 +28,19 @@ public class ApiResponse<T> {
         return response;
     }
 
-    public static <T> ApiResponse<T> BadRequest(String message) {
+    public static <T> ApiResponse<T> badRequest(String message) {
         return error(400, message);
     }
 
-    public static <T> ApiResponse<T> Unauthorized() {
+    public static <T> ApiResponse<T> unauthorized() {
         return error(401, "Unauthorized");
     }
 
-    public static <T> ApiResponse<T> Forbidden() {
+    public static <T> ApiResponse<T> forbidden() {
         return error(403, "Forbidden");
     }
 
-    public static <T> ApiResponse<T> NotFound() {
+    public static <T> ApiResponse<T> notFound() {
         return error(404, "Resource not found");
     }
 }
