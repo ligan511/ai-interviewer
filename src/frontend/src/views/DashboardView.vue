@@ -12,6 +12,13 @@ const historyCount = ref(0)
 const trends = ref<any[]>([])
 let trendChart: echarts.ECharts | null = null
 
+const statusLabel: Record<string, string> = {
+  CREATED: '未开始', IN_PROGRESS: '进行中', COMPLETED: '已完成'
+}
+const statusType: Record<string, string> = {
+  CREATED: 'info', IN_PROGRESS: 'warning', COMPLETED: 'success'
+}
+
 onMounted(async () => {
   try {
     const res = await interviewApi.history({ page: 1, pageSize: 5 })
@@ -78,7 +85,7 @@ function initTrendChart() {
       <el-table v-else :data="recentInterviews" style="width:100%">
         <el-table-column prop="createdAt" label="面试时间" width="180" />
         <el-table-column prop="jobId" label="岗位ID" width="100" />
-        <el-table-column prop="status" label="状态"><template #default="{ row }"><el-tag :type="row.status === 'COMPLETED' ? 'success' : 'warning'">{{ row.status }}</el-tag></template></el-table-column>
+        <el-table-column prop="status" label="状态"><template #default="{ row }"><el-tag :type="statusType[row.status] || 'info'">{{ statusLabel[row.status] || row.status }}</el-tag></template></el-table-column>
         <el-table-column label="操作"><template #default><el-button type="primary" link @click="router.push('/interviews')">查看详情</el-button></template></el-table-column>
       </el-table>
     </el-card>

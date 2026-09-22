@@ -31,6 +31,80 @@ function diffLabel(d?: string) {
   return (d && difficultyLabel[d]) || d || ''
 }
 
+// ── 每题倒计时（统一 300s，到时自动记空答并跳下一题）──────────────────
+const questionTimer = ref(300)
+const TIMER_TOTAL = 300
+let questionTimerInterval: ReturnType<typeof setInterval> | null = null
+
+function resetQuestionTimer() {
+  if (questionTimerInterval) clearInterval(questionTimerInterval)
+  questionTimer.value = TIMER_TOTAL
+  questionTimerInterval = setInterval(async () => {
+    if (submitting.value) return
+    questionTimer.value--
+    if (questionTimer.value <= 0) {
+      if (questionTimerInterval) clearInterval(questionTimerInterval)
+      questionTimerInterval = null
+      await onQuestionTimeout()
+    }
+  }, 1000)
+}
+
+// 超时：无论是否有文字都记一条空答（空答占位），再跳下一题
+async function onQuestionTimeout() {
+  if (isAllDone.value) return
+  const qId = currentQuestion.value?.questionId
+  if (!qId) {
+    const loaded = await loadNextQuestion()
+    if (loaded) {
+      currentQuestionIndex.value++
+      resetQuestionTimer()
+    } else {
+      questionLoadError.value = true
+      questionErrorType.value = 'llm'
+    }
+    return
+  }
+  // 提交空答占位（带标记，便于后端/报告识别）
+  try {
+    await interviewApi.submitAnswer(sessionId, {
+      questionId: qId,
+      answerText: '（本题超时未作答）',
+      clientDurationSeconds: TIMER_TOTAL,
+    })
+    answers.value.set(qId, { answerId: 0, status: 'TIMEOUT' })
+  } catch (e) { /* 忽略超时提交失败 */ }
+  // 进入下一题
+  if (answeredCount.value < totalQuestions.value) {
+    questionLoadError.value = false
+    questionErrorType.value = ''
+    questionLoading.value = true
+    const loaded = await loadNextQuestion()
+    questionLoading.value = false
+    if (loaded) {
+      currentQuestionIndex.value++
+      resetQuestionTimer()
+    } else {
+      questionLoadError.value = true
+      questionErrorType.value = 'llm'
+    }
+  } else {
+    await autoFinish()
+  }
+  answerText.value = ''
+  useVoice.value = false
+  audioChunks.value = []
+  stopSpeechRecognition()
+  answerStartTime.value = Date.now()
+  ElMessage.warning('本题已超时，自动记录为空答')
+}
+
+const timerDisplay = computed(() => {
+  const m = Math.floor(questionTimer.value / 60)
+  const s = questionTimer.value % 60
+  return `${String(m).padStart(2, '0')}:${String(s).padStart(2, '0')}`
+})
+
 // Voice recording
 const isRecording = ref(false)
 const mediaRecorder = ref<MediaRecorder | null>(null)
@@ -107,14 +181,16 @@ onMounted(async () => {
     if (sessionRes.code === 0) sessionInfo.value = sessionRes.data
     totalQuestions.value = sessionInfo.value?.questionLimit || 10
   } catch (e) { /* use default */ }
-  await loadNextQuestion()
+  const firstLoaded = await loadNextQuestion()
   answerStartTime.value = Date.now()
+  if (firstLoaded) resetQuestionTimer()
   timerRef.value = setInterval(() => {}, 60000)
 })
 
 onUnmounted(() => {
   if (timerRef.value) clearInterval(timerRef.value)
   if (recordTimer.value) clearInterval(recordTimer.value)
+  if (questionTimerInterval) clearInterval(questionTimerInterval)
   stopRecording()
   stopSpeechRecognition()
 })
@@ -145,6 +221,7 @@ async function retryNextQuestion() {
   questionLoading.value = false
   if (loaded) {
     currentQuestionIndex.value++
+    resetQuestionTimer()
   } else {
     questionLoadError.value = true
     questionErrorType.value = 'llm'
@@ -222,12 +299,14 @@ async function submitAnswerFn() {
         questionLoading.value = false
         if (loaded) {
           currentQuestionIndex.value++
+          resetQuestionTimer()
         } else {
           // 生成下一题失败：不自动结束，等待用户重试
           questionLoadError.value = true
           questionErrorType.value = 'llm'
         }
       } else {
+        if (questionTimerInterval) clearInterval(questionTimerInterval)
         await autoFinish()
       }
     }
@@ -321,7 +400,11 @@ function playRecording() {
                 问题 {{ answeredCount + 1 }} / {{ totalQuestions }}
                 <el-tag v-if="isAllDone" type="success" size="small" style="margin-left:8px">已完成</el-tag>
               </span>
-              <el-tag>{{ diffLabel(currentQuestion?.difficulty) }}</el-tag>
+              <span style="display:flex;align-items:center;gap:8px">
+                <el-tag v-if="!isAllDone && !questionLoadError">{{ timerDisplay }}</el-tag>
+                <el-tag type="danger" v-if="!isAllDone && !questionLoadError && questionTimer <= 30">即将超时</el-tag>
+                <el-tag>{{ diffLabel(currentQuestion?.difficulty) }}</el-tag>
+              </span>
             </div>
           </template>
 

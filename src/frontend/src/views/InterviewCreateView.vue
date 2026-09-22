@@ -37,11 +37,7 @@
 
         <el-form-item label="题目数量">
           <el-input-number v-model="form.questionLimit" :min="5" :max="30" :step="5" />
-        </el-form-item>
-
-        <el-form-item label="预计时长">
-          <el-input-number v-model="form.durationLimitSeconds" :min="300" :max="3600" :step="300" style="width: 150px" />
-          <span style="margin-left: 8px; color: #909399">秒</span>
+          <div style="margin-top:4px;font-size:12px;color:#909399">每题限时 5 分钟，超时自动记空答</div>
         </el-form-item>
       </el-form>
 

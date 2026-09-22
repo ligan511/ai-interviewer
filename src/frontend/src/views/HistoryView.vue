@@ -13,8 +13,8 @@
       </el-table-column>
       <el-table-column prop="status" label="状态">
         <template #default="{ row }">
-          <el-tag :type="row.status === 'COMPLETED' ? 'success' : 'warning'">
-            {{ row.status }}
+          <el-tag :type="statusType[row.status] || 'info'">
+            {{ statusLabel[row.status] || row.status }}
           </el-tag>
         </template>
       </el-table-column>
@@ -56,6 +56,12 @@ const pageSize = ref(10)
 const total = ref(0)
 const difficultyLabel: Record<string, string> = {
   junior: '初级', medium: '中级', senior: '高级'
+}
+const statusLabel: Record<string, string> = {
+  CREATED: '未开始', IN_PROGRESS: '进行中', COMPLETED: '已完成'
+}
+const statusType: Record<string, string> = {
+  CREATED: 'info', IN_PROGRESS: 'warning', COMPLETED: 'success'
 }
 
 onMounted(() => {
