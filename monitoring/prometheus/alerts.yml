@@ -1,0 +1,50 @@
+groups:
+  - name: ai-interviewer-alerts
+    rules:
+      # AI 调用 P95 延迟超 10s（持续 5m）
+      - alert: AI高延迟
+        expr: histogram_quantile(0.95, rate(ai_call_duration_seconds_bucket[5m])) > 10
+        for: 5m
+        labels:
+          severity: warning
+        annotations:
+          summary: "AI 调用 P95 延迟超过 10 秒"
+          description: "当前 P95 延迟 {{ $value | humanizeDuration }}，可能影响面试体验。"
+
+      # AI 调用失败率 > 30%（5m 窗口）
+      - alert: AI高失败率
+        expr: sum(rate(ai_call_total{status="failure"}[5m])) / sum(rate(ai_call_total[5m])) > 0.3
+        for: 3m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI 调用失败率超过 30%"
+          description: "5m 内失败率 {{ $value | humanizePercentage }}，可能 LLM 服务故障或限流。"
+
+      # 熔断器打开（answer 或 question 服务熔断）
+      - alert: AI熔断器打开
+        expr: ai_service_circuit_open == 1
+        for: 1m
+        labels:
+          severity: critical
+        annotations:
+          summary: "AI 服务熔断器已打开"
+          description: "service={{ $labels.service }} 熔断中，期间走本地兜底评分。"
+
+      # 接口 5xx 比例 > 5%
+      - alert: HTTP5xx升高
+        expr: sum(rate(http_server_requests_seconds_count{status=~"5.."}[5m])) / sum(rate(http_server_requests_seconds_count[5m])) > 0.05
+        for: 5m
+        labels:
+          severity: critical
+        annotations:
+          summary: "HTTP 5xx 比例超过 5%"
+
+      # 实例下线
+      - alert: 实例不可达
+        expr: up == 0
+        for: 2m
+        labels:
+          severity: critical
+        annotations:
+          summary: "{{ $labels.instance }} 不可达"

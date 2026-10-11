@@ -1,5 +1,7 @@
 package com.aiinterviewer.service.impl;
 
+import com.aiinterviewer.common.EvaluationValidator;
+import com.aiinterviewer.common.MetricsService;
 import com.aiinterviewer.entity.*;
 import com.aiinterviewer.mapper.*;
 import com.aiinterviewer.service.InterviewAnswerService;
@@ -17,6 +19,7 @@ import java.math.BigDecimal;
 import java.time.LocalDateTime;
 import java.util.*;
 import java.util.concurrent.Executor;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Service
@@ -35,6 +38,47 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
 
     @Value("${ai.service.base-url}")
     private String aiServiceUrl;
+
+    /** P1 可观测性：可选注入 MetricsService（无则不埋点，便于单测构造器兼容）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MetricsService metricsService;
+
+    private final AiServiceCircuitBreaker aiServiceCircuitBreaker = new AiServiceCircuitBreaker();
+
+    /** P0 并发与限流：AI 服务熔断器（连续失败 N 次打开，冷却期后半开探测）。 */
+    static class AiServiceCircuitBreaker {
+        private static final int FAILURE_THRESHOLD = 5;
+        private static final long COOLDOWN_MS = 30_000L;
+        private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+        private volatile long openedAt = 0L;
+
+        boolean isOpen() {
+            if (consecutiveFailures.get() < FAILURE_THRESHOLD) return false;
+            if (openedAt == 0L) return true;
+            return System.currentTimeMillis() - openedAt < COOLDOWN_MS;
+        }
+
+        void recordFailure() {
+            int n = consecutiveFailures.incrementAndGet();
+            if (n == FAILURE_THRESHOLD) {
+                openedAt = System.currentTimeMillis();
+                // 静态内部类不能引用外层类的 log 实例，用独立 logger
+                Slf4jLogger.warn("AI service circuit breaker OPEN after {} consecutive failures", n);
+            }
+        }
+
+        void recordSuccess() {
+            consecutiveFailures.set(0);
+            openedAt = 0L;
+        }
+    }
+
+    /** 静态内部类专用 logger（避免与 MyBatis-Plus ServiceImpl 的 log 字段冲突）。 */
+    private static final class Slf4jLogger {
+        private static final org.slf4j.Logger log =
+                org.slf4j.LoggerFactory.getLogger(InterviewAnswerServiceImpl.class);
+        static void warn(String msg, Object... args) { log.warn(msg, args); }
+    }
 
     @Override
     @Transactional
@@ -162,6 +206,13 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
     private void evaluateAnswerAsync(Long answerId, Long questionId, String answerText, InterviewSession session) {
         // 使用线程池替代裸 new Thread，避免无限制创建线程、便于资源管控
         aiTaskExecutor.execute(() -> {
+            if (aiServiceCircuitBreaker != null && aiServiceCircuitBreaker.isOpen()) {
+                // P0 并发与限流：AI 服务熔断打开时跳过 LLM 调用，直接走 Java 启发式兜底评分，
+                // 避免对故障的 AI 服务持续重试造成雪崩
+                log.warn("AI service circuit breaker OPEN, skipping LLM evaluation for answer {}", answerId);
+                applyFallbackEvaluationLocally(answerId, questionId, answerText);
+                return;
+            }
             try {
                 InterviewQuestion question = questionMapper.selectById(questionId);
                 if (question == null) return;
@@ -209,6 +260,8 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
                 evaluation.setReferenceAnswer((String) evalResult.getOrDefault("referenceAnswer", ""));
                 evaluation.setModelName((String) evalResult.get("modelName"));
                 evaluation.setCreatedAt(LocalDateTime.now());
+                // P0 数据质量：入库前校验 7 分数量值域 + referenceAnswer 长度 + 加权和一致性重算
+                EvaluationValidator.validateAndNormalize(evaluation);
                 evaluationMapper.insert(evaluation);
 
                 InterviewAnswer answer = answerMapper.selectById(answerId);
@@ -320,14 +373,24 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
         headers.setContentType(MediaType.APPLICATION_JSON);
         HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
 
+        // P1 可观测性：埋点 AI 评分调用耗时 + 成功/失败计数
+        io.micrometer.core.instrument.Timer.Sample sample =
+                metricsService != null ? metricsService.startTimer("answer_evaluate") : null;
         try {
             ResponseEntity<Map> response = restTemplate.postForEntity(
                     aiServiceUrl + "/internal/ai/answer/evaluate", entity, Map.class);
             if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                aiServiceCircuitBreaker.recordSuccess();
+                if (metricsService != null && sample != null) metricsService.recordSuccess("answer_evaluate", sample);
                 return response.getBody();
             }
+            // 非 2xx 也视为失败
+            aiServiceCircuitBreaker.recordFailure();
+            if (metricsService != null && sample != null) metricsService.recordFailure("answer_evaluate", sample, new IllegalStateException("HTTP " + response.getStatusCode()));
         } catch (Exception e) {
             log.warn("AI evaluation failed, using fallback: {}", e.getMessage());
+            aiServiceCircuitBreaker.recordFailure();
+            if (metricsService != null && sample != null) metricsService.recordFailure("answer_evaluate", sample, e);
         }
 
         Map<String, Object> fallback = new HashMap<>();
@@ -348,6 +411,72 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
         return fallback;
     }
 
+    /**
+     * P0 并发与限流：熔断器打开时的本地兜底评分。
+     * 跳过所有 AI 调用（RAG 检索 + LLM 评分），直接用 Java 启发式评分落库，
+     * 并标记 fallback 说明，避免对故障 AI 服务持续重试。
+     */
+    private void applyFallbackEvaluationLocally(Long answerId, Long questionId, String answerText) {
+        try {
+            InterviewQuestion question = questionMapper.selectById(questionId);
+            String fallbackAnswer = answerText == null ? "" : answerText;
+
+            Map<String, Object> evalResult = buildLocalFallbackScoring(question != null ? question.getContent() : "", fallbackAnswer);
+            AnswerEvaluation evaluation = new AnswerEvaluation();
+            evaluation.setAnswerId(answerId);
+            Number ns = (Number) evalResult.getOrDefault("totalScore", 0);
+            evaluation.setTotalScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("professionalScore", 0);
+            evaluation.setProfessionalScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("logicScore", 0);
+            evaluation.setLogicScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("completenessScore", 0);
+            evaluation.setCompletenessScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("analysisScore", 0);
+            evaluation.setAnalysisScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("expressionScore", 0);
+            evaluation.setExpressionScore(BigDecimal.valueOf(ns.doubleValue()));
+            ns = (Number) evalResult.getOrDefault("jobMatchScore", 0);
+            evaluation.setJobMatchScore(BigDecimal.valueOf(ns.doubleValue()));
+            evaluation.setStrengths((List<String>) evalResult.getOrDefault("strengths", Collections.emptyList()));
+            evaluation.setWeaknesses((List<String>) evalResult.getOrDefault("weaknesses", Collections.emptyList()));
+            evaluation.setSuggestions((List<String>) evalResult.getOrDefault("suggestions", Collections.emptyList()));
+            evaluation.setReferenceAnswer((String) evalResult.getOrDefault("referenceAnswer", ""));
+            evaluation.setModelName("local-heuristic-fallback");
+            evaluation.setCreatedAt(LocalDateTime.now());
+            EvaluationValidator.validateAndNormalize(evaluation);
+            evaluationMapper.insert(evaluation);
+
+            InterviewAnswer answer = answerMapper.selectById(answerId);
+            if (answer != null) {
+                answer.setStatus("EVALUATED");
+                answerMapper.updateById(answer);
+            }
+            log.info("Answer {} evaluated via local fallback (circuit breaker open)", answerId);
+        } catch (Exception e) {
+            log.error("Local fallback evaluation failed for answer {}: {}", answerId, e.getMessage());
+        }
+    }
+
+    /** 构建本地启发式评分结果（与 callAiEvaluate 的 fallback 逻辑一致，独立方法便于复用）。 */
+    private Map<String, Object> buildLocalFallbackScoring(String question, String answer) {
+        Map<String, Object> fallback = new HashMap<>();
+        int baseScore = Math.min(100, 50 + answer.length() / 10);
+        fallback.put("totalScore", baseScore);
+        fallback.put("professionalScore", Math.max(0, baseScore));
+        fallback.put("logicScore", Math.max(0, baseScore - 5));
+        fallback.put("completenessScore", Math.max(0, baseScore - 3));
+        fallback.put("analysisScore", Math.max(0, baseScore));
+        fallback.put("expressionScore", Math.max(0, baseScore - 2));
+        fallback.put("jobMatchScore", Math.max(0, baseScore + 2));
+        fallback.put("strengths", Collections.singletonList("回答内容较完整，覆盖了基本要点"));
+        fallback.put("weaknesses", Collections.singletonList("AI 评分服务熔断，本次为本地启发式兜底评分，仅供参考"));
+        fallback.put("suggestions", Collections.singletonList("AI 服务恢复后可重新提交以获得模型评分"));
+        String truncatedAnswer = answer.length() > 300 ? answer.substring(0, 300) + "..." : answer;
+        fallback.put("referenceAnswer", "（AI 评分服务熔断，以下为系统兜底评分，您的原始回答）\n" + truncatedAnswer);
+        return fallback;
+    }
+
     @Override
     public InterviewAnswer getAnswer(Long answerId) {
         return answerMapper.selectById(answerId);
@@ -358,7 +487,8 @@ public class InterviewAnswerServiceImpl extends ServiceImpl<InterviewAnswerMappe
         AnswerEvaluation evaluation = evaluationMapper.selectOne(new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnswerEvaluation>()
                 .eq(AnswerEvaluation::getAnswerId, answerId));
         if (evaluation == null) return null;
-
+        // P0 数据质量：读取时同样做加权和一致性重算，保证返回给前端的数据可信
+        EvaluationValidator.validateAndNormalize(evaluation);
         Map<String, Object> result = new HashMap<>();
         result.put("totalScore", evaluation.getTotalScore());
         result.put("professionalScore", evaluation.getProfessionalScore());

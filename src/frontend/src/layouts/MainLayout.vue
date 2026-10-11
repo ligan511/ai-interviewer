@@ -1,17 +1,30 @@
 <template>
   <div class="main-layout">
     <el-header class="header">
-      <div class="logo">AI 智能面试官</div>
-      <el-menu mode="horizontal" :ellipsis="false" router :default-active="activeRoute">
-        <el-menu-item index="/dashboard">首页</el-menu-item>
-        <el-menu-item index="/jobs">岗位浏览</el-menu-item>
-        <el-menu-item index="/knowledge">知识库</el-menu-item>
-        <el-menu-item index="/interviews">历史记录</el-menu-item>
-        <el-menu-item index="/profile">个人中心</el-menu-item>
+      <div class="logo">
+        <el-icon :size="24"><Cpu /></el-icon>
+        <span class="logo-text">AI 智能面试官</span>
+      </div>
+      <el-menu mode="horizontal" :ellipsis="false" router :default-active="activeRoute" class="top-menu">
+        <el-menu-item index="/dashboard">
+          <el-icon><HomeFilled /></el-icon><span>首页</span>
+        </el-menu-item>
+        <el-menu-item index="/jobs">
+          <el-icon><Briefcase /></el-icon><span>岗位浏览</span>
+        </el-menu-item>
+        <el-menu-item index="/knowledge">
+          <el-icon><Collection /></el-icon><span>知识库</span>
+        </el-menu-item>
+        <el-menu-item index="/interviews">
+          <el-icon><History /></el-icon><span>历史记录</span>
+        </el-menu-item>
+        <el-menu-item index="/profile">
+          <el-icon><User /></el-icon><span>个人中心</span>
+        </el-menu-item>
       </el-menu>
       <div class="user-info">
-        <span>{{ userStore.userInfo?.username }}</span>
-        <el-button type="danger" size="small" @click="handleLogout">退出</el-button>
+        <el-tag type="info" effect="plain" round>{{ userStore.userInfo?.username }}</el-tag>
+        <el-button type="danger" size="small" plain @click="handleLogout">退出</el-button>
       </div>
     </el-header>
     <el-main class="main">
@@ -52,20 +65,38 @@ function handleLogout() {
   display: flex;
   align-items: center;
   background: #fff;
-  border-bottom: 1px solid #e4e7ed;
-  padding: 0 20px;
+  border-bottom: 1px solid #ebeef5;
+  padding: 0 24px;
   height: 60px;
+  box-shadow: var(--shadow-card);
+  position: relative;
+  z-index: 10;
 }
 .logo {
-  font-size: 20px;
-  font-weight: bold;
-  color: #409eff;
-  margin-right: 40px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  margin-right: 36px;
   white-space: nowrap;
+  color: var(--el-color-primary);
 }
-.header .el-menu {
+.logo .el-icon { font-size: 24px; }
+.logo-text {
+  font-size: 18px;
+  font-weight: 700;
+  letter-spacing: 0.5px;
+}
+.top-menu {
   flex: 1;
   border-bottom: none;
+  --el-menu-item-height: 60px;
+}
+/* 菜单项当前路由高亮（下划线指示器） */
+:deep(.top-menu .el-menu-item.is-active) {
+  color: var(--el-color-primary);
+  font-weight: 600;
+  border-bottom: 2px solid var(--el-color-primary);
+  margin-bottom: -1px;
 }
 .user-info {
   display: flex;
@@ -84,6 +115,6 @@ function handleLogout() {
   font-size: 12px;
   padding: 10px;
   background: #fff;
-  border-top: 1px solid #e4e7ed;
+  border-top: 1px solid #ebeef5;
 }
 </style>

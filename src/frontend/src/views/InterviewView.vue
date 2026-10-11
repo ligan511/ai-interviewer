@@ -13,6 +13,7 @@ const answers = ref<Map<number, any>>(new Map())
 const currentQuestionIndex = ref(0)
 const answerText = ref('')
 const currentEvaluation = ref<any>(null)
+const refExpanded = ref<string[]>(['ref'])
 const submitting = ref(false)
 const questionLoadError = ref(false)
 const questionLoading = ref(false)
@@ -169,11 +170,36 @@ const progressPercent = computed(() =>
   Math.round((answeredCount.value / Math.max(totalQuestions.value, 1)) * 100)
 )
 
+// 倒计时环形进度条状态（视觉美化）
+const timerDanger = computed(() => questionTimer.value <= 60)
+const timerPulse = computed(() => questionTimer.value <= 30)
+
+// 评分仪表盘颜色（按分数区间着色）
+const scoreColor = computed(() => {
+  const s = Number(currentEvaluation.value?.totalScore) || 0
+  if (s >= 85) return '#67c23a'
+  if (s >= 70) return '#409eff'
+  if (s >= 60) return '#e6a23c'
+  return '#f56c6c'
+})
+
+// 语音按钮视觉状态（录音中闪烁红点）
+const voiceButtonClass = computed(() => ({
+  'voice-btn-recording': isRecording.value,
+  'voice-btn-idle': !isRecording.value
+}))
+
 const currentQuestion = computed(() => questions.value[currentQuestionIndex.value])
 
 const answeredCount = computed(() => answers.value.size)
 
 const isAllDone = computed(() => answeredCount.value >= totalQuestions.value)
+
+const refLines = computed(() => {
+  const text = currentEvaluation.value?.referenceAnswer
+  if (!text) return []
+  return String(text).split('\n').map((l: string) => l.trim()).filter(Boolean)
+})
 
 onMounted(async () => {
   try {
@@ -400,9 +426,21 @@ function playRecording() {
                 问题 {{ answeredCount + 1 }} / {{ totalQuestions }}
                 <el-tag v-if="isAllDone" type="success" size="small" style="margin-left:8px">已完成</el-tag>
               </span>
-              <span style="display:flex;align-items:center;gap:8px">
-                <el-tag v-if="!isAllDone && !questionLoadError">{{ timerDisplay }}</el-tag>
-                <el-tag type="danger" v-if="!isAllDone && !questionLoadError && questionTimer <= 30">即将超时</el-tag>
+              <span style="display:flex;align-items:center;gap:12px">
+                <div v-if="!isAllDone && !questionLoadError" class="ring-timer" :class="{ danger: timerDanger, pulse: timerPulse }">
+                  <el-progress
+                    type="circle"
+                    :percentage="Math.round((questionTimer / TIMER_TOTAL) * 100)"
+                    :width="54"
+                    :stroke-width="5"
+                    :color="timerDanger ? '#f56c6c' : '#409eff'"
+                  >
+                    <template #default="{ percentage }">
+                      <span class="ring-timer-text">{{ timerDisplay }}</span>
+                    </template>
+                  </el-progress>
+                </div>
+                <el-tag type="danger" v-if="!isAllDone && !questionLoadError && timerPulse" effect="dark" class="pulse-tag">即将超时</el-tag>
                 <el-tag>{{ diffLabel(currentQuestion?.difficulty) }}</el-tag>
               </span>
             </div>
@@ -423,10 +461,13 @@ function playRecording() {
             <div class="answer-area">
               <div style="margin-bottom:12px;display:flex;gap:12px;align-items:center">
                 <el-button
+                  class="voice-btn"
+                  :class="voiceButtonClass"
                   :type="isRecording ? 'danger' : 'default'"
                   :icon="isRecording ? 'VideoPause' : 'VideoCamera'"
                   @click="isRecording ? stopRecording() : startRecording()"
                 >
+                  <span v-if="isRecording" class="recording-dot"></span>
                   {{ isRecording ? `录制中 ${recordingTime}s` : '🎤 语音回答' }}
                 </el-button>
                 <el-button v-if="!isRecording && audioChunks.length > 0" type="success" plain @click="playRecording">播放录音</el-button>
@@ -468,18 +509,32 @@ function playRecording() {
       <el-col :span="8">
         <el-card v-if="currentEvaluation && !isAllDone" header="当前评分">
           <div class="score-summary">
-            <div class="total-score">
-              <span class="score-number">{{ currentEvaluation.totalScore }}</span>
-              <span class="score-label">综合得分</span>
-            </div>
+            <el-progress
+              type="dashboard"
+              :percentage="Number(currentEvaluation.totalScore) || 0"
+              :width="120"
+              :stroke-width="10"
+              :color="scoreColor"
+            >
+              <template #default>
+                <span class="dash-score">{{ currentEvaluation.totalScore }}</span>
+                <span class="dash-label">综合得分</span>
+              </template>
+            </el-progress>
           </div>
           <el-divider />
-          <h4>优点</h4>
-          <ul><li v-for="s in currentEvaluation.strengths" :key="s">{{ s }}</li></ul>
-          <h4>不足</h4>
-          <ul><li v-for="w in currentEvaluation.weaknesses" :key="w">{{ w }}</li></ul>
-          <h4>参考答案</h4>
-          <p class="reference-answer">{{ currentEvaluation.referenceAnswer }}</p>
+          <h4><el-icon style="vertical-align:-2px;color:#67c23a"><Trophy /></el-icon> 优点</h4>
+          <ul class="strength-list"><li v-for="s in currentEvaluation.strengths" :key="s">{{ s }}</li></ul>
+          <h4><el-icon style="vertical-align:-2px;color:#f56c6c"><WarningFilled /></el-icon> 不足</h4>
+          <ul class="weakness-list"><li v-for="w in currentEvaluation.weaknesses" :key="w">{{ w }}</li></ul>
+          <h4><el-icon style="vertical-align:-2px;color:#409eff"><Document /></el-icon> 参考答案</h4>
+          <el-collapse v-model="refExpanded">
+            <el-collapse-item title="查看参考答案（分点详解）" name="ref">
+              <div class="reference-answer">
+                <div v-for="(line, li) in refLines" :key="li" class="ref-line" :class="{ 'ref-tip': line.startsWith('评分参考') }">{{ line }}</div>
+              </div>
+            </el-collapse-item>
+          </el-collapse>
         </el-card>
         <el-card v-if="!isAllDone" header="面试进度">
           <el-timeline>
@@ -502,13 +557,74 @@ function playRecording() {
 .interview-page { padding: 10px; }
 .question-area { padding: 10px 0; }
 .finish-area { padding: 40px 0; text-align: center; }
-.question-text { font-size: 18px; font-weight: bold; color: #303133; line-height: 1.6; margin-bottom: 20px; }
+.question-text {
+  font-size: 20px;
+  font-weight: 600;
+  color: #303133;
+  line-height: 1.7;
+  margin-bottom: 20px;
+  padding: 16px;
+  background: #f5f7fa;
+  border-left: 4px solid var(--el-color-primary);
+  border-radius: var(--radius-md);
+}
 .answer-area { margin-top: 16px; }
-.score-summary { text-align: center; padding: 20px 0; }
-.score-number { display: block; font-size: 48px; font-weight: bold; color: #409eff; }
-.score-label { font-size: 14px; color: #909399; }
-.reference-answer { background: #f5f7fa; padding: 12px; border-radius: 4px; font-size: 14px; color: #606266; line-height: 1.6; }
+
+/* 环形倒计时 */
+.ring-timer { display: inline-block; }
+.ring-timer .ring-timer-text { font-size: 12px; font-weight: 600; color: #303133; }
+.ring-timer.danger .ring-timer-text { color: #f56c6c; }
+.ring-timer.pulse { animation: ringPulse 1s infinite; }
+.pulse-tag { animation: tagPulse 1s infinite; }
+@keyframes ringPulse { 0%, 100% { transform: scale(1); } 50% { transform: scale(1.06); } }
+@keyframes tagPulse { 0%, 100% { opacity: 1; } 50% { opacity: 0.5; } }
+
+/* 评分仪表盘 */
+.score-summary { text-align: center; padding: 8px 0; display: flex; justify-content: center; }
+.score-summary .dash-score { font-size: 32px; font-weight: 700; color: #303133; display: block; line-height: 1.2; }
+.score-summary .dash-label { font-size: 13px; color: #909399; }
+
+/* 优劣势列表 */
+.strength-list li { color: #67c23a; }
+.weakness-list li { color: #f56c6c; }
+
+/* 参考答案 */
+.reference-answer {
+  background: #f5f7fa;
+  padding: 14px;
+  border-radius: var(--radius-md);
+  font-size: 14px;
+  color: #606266;
+  line-height: 1.7;
+  border-left: 3px solid var(--el-color-primary);
+}
+.ref-line { line-height: 1.8; margin-bottom: 6px; padding-left: 4px; }
+.ref-line::before { content: "•"; color: var(--el-color-primary); margin-right: 6px; font-weight: 700; }
+.ref-tip {
+  background: #fff8e6;
+  padding: 8px 10px;
+  border-radius: var(--radius-sm);
+  border-left: 3px solid #e6a23c;
+  margin-top: 8px;
+  font-weight: 500;
+}
+.ref-tip::before { content: "★"; color: #e6a23c; }
+
+/* 语音按钮 */
+.voice-btn { position: relative; }
+.voice-btn-recording .recording-dot {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  border-radius: 50%;
+  background: #f56c6c;
+  margin-right: 6px;
+  animation: dotBlink 1s infinite;
+}
+.recording-dot { vertical-align: middle; }
+@keyframes dotBlink { 0%, 100% { opacity: 1; } 50% { opacity: 0.3; } }
+
 ul { padding-left: 20px; margin: 8px 0; }
 li { margin: 4px 0; font-size: 14px; color: #606266; }
-h4 { margin: 12px 0 8px; font-size: 14px; color: #303133; }
+h4 { margin: 14px 0 8px; font-size: 14px; color: #303133; font-weight: 600; display: flex; align-items: center; gap: 4px; }
 </style>

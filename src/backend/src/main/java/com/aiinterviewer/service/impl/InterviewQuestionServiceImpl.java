@@ -1,5 +1,6 @@
 package com.aiinterviewer.service.impl;
 
+import com.aiinterviewer.common.MetricsService;
 import com.aiinterviewer.entity.InterviewQuestion;
 import com.aiinterviewer.entity.InterviewSession;
 import com.aiinterviewer.entity.Job;
@@ -20,6 +21,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.client.RestTemplate;
 
 import java.util.*;
+import java.util.concurrent.atomic.AtomicInteger;
 
 @Slf4j
 @Service
@@ -28,6 +30,13 @@ public class InterviewQuestionServiceImpl extends ServiceImpl<InterviewQuestionM
 
     @Value("${ai.service.base-url}")
     private String aiServiceUrl;
+
+    /** P0 并发与限流：AI 服务熔断器（连续失败 N 次打开，冷却期后半开探测）。 */
+    private final AiServiceCircuitBreaker aiServiceCircuitBreaker = new AiServiceCircuitBreaker();
+
+    /** P1 可观测性：可选注入 MetricsService（无则不埋点，便于单测构造器兼容）。 */
+    @org.springframework.beans.factory.annotation.Autowired(required = false)
+    private MetricsService metricsService;
 
     private final RestTemplate restTemplate;
     private final InterviewSessionMapper sessionMapper;
@@ -133,23 +142,41 @@ public class InterviewQuestionServiceImpl extends ServiceImpl<InterviewQuestionM
             HttpHeaders headers = new HttpHeaders();
             headers.setContentType(MediaType.APPLICATION_JSON);
             HttpEntity<Map<String, Object>> entity = new HttpEntity<>(requestBody, headers);
-            ResponseEntity<Map> response = restTemplate.postForEntity(
-                    aiServiceUrl + "/internal/ai/question/generate", entity, Map.class);
-            if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
-                Map<String, Object> data = response.getBody();
-                InterviewQuestion question = new InterviewQuestion();
-                question.setSessionId(sessionId);
-                question.setParentQuestionId(lastQuestionId);
-                question.setContent((String) data.get("content"));
-                question.setQuestionType((String) data.getOrDefault("type", "technical"));
-                question.setDifficulty((String) data.getOrDefault("difficulty", session.getDifficulty()));
-                question.setTargetSkill((String) data.get("targetSkill"));
-                question.setSequenceNo(getNextSequenceNo(sessionId));
-                save(question);
-                return question;
+            // P0 并发与限流：AI 服务熔断打开时跳过 LLM 调用，直接走 mock 题库兜底
+            if (aiServiceCircuitBreaker.isOpen()) {
+                log.warn("AI service circuit breaker OPEN, skipping LLM question generation, using fallback");
+                return generateFallbackQuestion(sessionId, lastQuestionId, session.getDifficulty(), (int) currentCount);
+            }
+            // P1 可观测性：埋点 AI 出题调用耗时 + 成功/失败计数
+            io.micrometer.core.instrument.Timer.Sample sample =
+                    metricsService != null ? metricsService.startTimer("question_generate") : null;
+            try {
+                ResponseEntity<Map> response = restTemplate.postForEntity(
+                        aiServiceUrl + "/internal/ai/question/generate", entity, Map.class);
+                if (response.getStatusCode().is2xxSuccessful() && response.getBody() != null) {
+                    aiServiceCircuitBreaker.recordSuccess();
+                    if (metricsService != null && sample != null) metricsService.recordSuccess("question_generate", sample);
+                    Map<String, Object> data = response.getBody();
+                    InterviewQuestion question = new InterviewQuestion();
+                    question.setSessionId(sessionId);
+                    question.setParentQuestionId(lastQuestionId);
+                    question.setContent((String) data.get("content"));
+                    question.setQuestionType((String) data.getOrDefault("type", "technical"));
+                    question.setDifficulty((String) data.getOrDefault("difficulty", session.getDifficulty()));
+                    question.setTargetSkill((String) data.get("targetSkill"));
+                    question.setSequenceNo(getNextSequenceNo(sessionId));
+                    save(question);
+                    return question;
+                }
+                aiServiceCircuitBreaker.recordFailure();
+                if (metricsService != null && sample != null) metricsService.recordFailure("question_generate", sample, new IllegalStateException("HTTP " + response.getStatusCode()));
+            } catch (Exception e) {
+                if (metricsService != null && sample != null) metricsService.recordFailure("question_generate", sample, e);
+                throw e;
             }
         } catch (Exception e) {
             log.error("AI service call failed: {}", e.getMessage());
+            aiServiceCircuitBreaker.recordFailure();
         }
         return generateFallbackQuestion(sessionId, lastQuestionId, session.getDifficulty(), (int) currentCount);
     }
@@ -202,5 +229,40 @@ public class InterviewQuestionServiceImpl extends ServiceImpl<InterviewQuestionM
         question.setSequenceNo(getNextSequenceNo(sessionId));
         save(question);
         return question;
+    }
+
+    /** P0 并发与限流：AI 服务熔断器（连续失败 N 次打开，冷却期后半开探测）。 */
+    static class AiServiceCircuitBreaker {
+        private static final int FAILURE_THRESHOLD = 5;
+        private static final long COOLDOWN_MS = 30_000L;
+        private final AtomicInteger consecutiveFailures = new AtomicInteger(0);
+        private volatile long openedAt = 0L;
+
+        boolean isOpen() {
+            if (consecutiveFailures.get() < FAILURE_THRESHOLD) return false;
+            if (openedAt == 0L) return true;
+            return System.currentTimeMillis() - openedAt < COOLDOWN_MS;
+        }
+
+        void recordFailure() {
+            int n = consecutiveFailures.incrementAndGet();
+            if (n == FAILURE_THRESHOLD) {
+                openedAt = System.currentTimeMillis();
+                // 静态内部类不能引用外层类的 log 实例，用独立 logger
+                Slf4jLogger.warn("AI service circuit breaker OPEN after {} consecutive failures", n);
+            }
+        }
+
+        void recordSuccess() {
+            consecutiveFailures.set(0);
+            openedAt = 0L;
+        }
+    }
+
+    /** 静态内部类专用 logger（避免与 MyBatis-Plus ServiceImpl 的 log 字段冲突）。 */
+    private static final class Slf4jLogger {
+        private static final org.slf4j.Logger log =
+                org.slf4j.LoggerFactory.getLogger(InterviewQuestionServiceImpl.class);
+        static void warn(String msg, Object... args) { log.warn(msg, args); }
     }
 }

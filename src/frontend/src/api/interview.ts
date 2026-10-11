@@ -72,6 +72,13 @@ export interface InterviewReport {
   createdAt: string
 }
 
+export interface ReportWithReferences {
+  report: InterviewReport | null
+  referenceAnswers: { question: string; referenceAnswer: string }[]
+  validCount?: number
+  totalAnswered?: number
+}
+
 export const interviewApi = {
   create(data: CreateInterviewRequest) {
     return api.post<any, { code: number; data: { sessionId: number; status: string }; message: string }>('/interviews', data)
@@ -102,7 +109,7 @@ export const interviewApi = {
     return api.get<any, { code: number; data: Evaluation; message: string }>(`/answers/${answerId}/evaluation`)
   },
   getReport(sessionId: number) {
-    return api.get<any, { code: number; data: InterviewReport; message: string }>(`/interviews/${sessionId}/report`)
+    return api.get<any, { code: number; data: ReportWithReferences; message: string }>(`/interviews/${sessionId}/report`)
   },
   submitAudioAnswer(sessionId: number, audioBlob: Blob, questionId: number) {
     const formData = new FormData()

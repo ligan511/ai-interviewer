@@ -2,6 +2,7 @@ package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
 import com.aiinterviewer.common.SecurityContext;
+import com.aiinterviewer.common.UserRateLimiter;
 import com.aiinterviewer.controller.dto.CreateInterviewRequest;
 import com.aiinterviewer.entity.InterviewSession;
 import com.aiinterviewer.service.InterviewSessionService;
@@ -19,11 +20,16 @@ public class InterviewController {
 
     private final InterviewSessionService sessionService;
     private final SecurityContext securityContext;
+    private final UserRateLimiter rateLimiter;
 
     @PostMapping
     public ApiResponse<Map<String, Object>> create(@Valid @RequestBody CreateInterviewRequest req,
-                                                    Authentication auth) {
+                                                     Authentication auth) {
         Long userId = resolveUserId(auth);
+        // P0 并发与限流：单用户 QPS 超限返回 429
+        if (!rateLimiter.tryAcquire(userId)) {
+            return ApiResponse.<Map<String, Object>>error(429, "请求过于频繁，请稍后重试");
+        }
         InterviewSession session = sessionService.createSession(
                 userId, req.getJobId(), req.getResumeId(),
                 req.getType() != null ? req.getType() : "technical",

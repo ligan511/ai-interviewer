@@ -47,7 +47,14 @@ public class JwtAuthFilter extends OncePerRequestFilter {
                 }
             }
         } catch (Exception e) {
-            logger.warn("JWT validation failed: " + e.getMessage());
+            // P0 安全加固：日志脱敏，不打印完整异常消息（可能含 token 片段/内部堆栈）
+            // 只记录"JWT 校验失败"事实，token 前缀进 DEBUG 级别
+            String prefix = (jwt != null && jwt.length() > 12) ? jwt.substring(0, 12) : String.valueOf(jwt);
+            if (logger.isDebugEnabled()) {
+                logger.debug("JWT validation failed for token prefix '..." + prefix + "': " + e.getMessage());
+            } else {
+                logger.warn("JWT validation failed");
+            }
         }
         filterChain.doFilter(request, response);
     }

@@ -3,11 +3,13 @@ package com.aiinterviewer.controller;
 import com.aiinterviewer.common.ApiResponse;
 import com.aiinterviewer.common.FileUploadValidator;
 import com.aiinterviewer.common.SecurityContext;
+import com.aiinterviewer.common.UserRateLimiter;
 import com.aiinterviewer.controller.dto.SubmitAnswerRequest;
 import com.aiinterviewer.service.InterviewAnswerService;
 import jakarta.validation.Valid;
 import lombok.RequiredArgsConstructor;
 import org.springframework.beans.factory.annotation.Value;
+import org.springframework.http.HttpStatus;
 import org.springframework.security.core.Authentication;
 import org.springframework.web.bind.annotation.*;
 import org.springframework.web.multipart.MultipartFile;
@@ -26,6 +28,7 @@ public class AnswerController {
 
     private final InterviewAnswerService answerService;
     private final SecurityContext securityContext;
+    private final UserRateLimiter rateLimiter;
 
     @Value("${ai.upload.dir:./uploads}")
     private String uploadDir;
@@ -35,6 +38,10 @@ public class AnswerController {
                                                      @Valid @RequestBody SubmitAnswerRequest req,
                                                      Authentication auth) {
         Long userId = resolveUserId(auth);
+        // P0 并发与限流：单用户 QPS 超限返回 429，避免评分任务雪崩
+        if (!rateLimiter.tryAcquire(userId)) {
+            return ApiResponse.<Map<String, Object>>error(429, "请求过于频繁，请稍后重试");
+        }
         var result = answerService.submitAnswer(sessionId, userId, req.getQuestionId(), req.getAnswerText(),
                 req.getClientDurationSeconds());
         return ApiResponse.ok(Map.of(
@@ -46,10 +53,14 @@ public class AnswerController {
 
     @PostMapping(value = "/audio", consumes = "multipart/form-data")
     public ApiResponse<Map<String, Object>> submitAudio(@PathVariable Long sessionId,
-                                                         @RequestParam("questionId") Long questionId,
-                                                         @RequestParam("audio") MultipartFile audioFile,
-                                                         Authentication auth) {
+                                                          @RequestParam("questionId") Long questionId,
+                                                          @RequestParam("audio") MultipartFile audioFile,
+                                                          Authentication auth) {
         Long userId = resolveUserId(auth);
+        // P0 并发与限流：单用户 QPS 超限返回 429
+        if (!rateLimiter.tryAcquire(userId)) {
+            return ApiResponse.<Map<String, Object>>error(429, "请求过于频繁，请稍后重试");
+        }
         // 安全校验：扩展名白名单 + MIME 黑名单 + 大小限制
         FileUploadValidator.validateAudio(audioFile);
         try {

@@ -2,6 +2,7 @@ package com.aiinterviewer.controller;
 
 import com.aiinterviewer.common.ApiResponse;
 import com.aiinterviewer.common.SecurityContext;
+import com.aiinterviewer.common.UserRateLimiter;
 import com.aiinterviewer.service.InterviewQuestionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.security.core.Authentication;
@@ -17,12 +18,17 @@ public class QuestionController {
 
     private final InterviewQuestionService questionService;
     private final SecurityContext securityContext;
+    private final UserRateLimiter rateLimiter;
 
     @PostMapping("/next")
     public ApiResponse<Map<String, Object>> nextQuestion(@PathVariable Long sessionId,
-                                                          @RequestParam(required = false) Long lastQuestionId,
-                                                          Authentication auth) {
+                                                           @RequestParam(required = false) Long lastQuestionId,
+                                                           Authentication auth) {
         Long userId = resolveUserId(auth);
+        // P0 并发与限流：单用户 QPS 超限返回 429
+        if (!rateLimiter.tryAcquire(userId)) {
+            return ApiResponse.<Map<String, Object>>error(429, "请求过于频繁，请稍后重试");
+        }
         var question = questionService.generateNextQuestion(sessionId, userId, lastQuestionId);
         if (question == null) {
             return ApiResponse.error(409, "No more questions available");

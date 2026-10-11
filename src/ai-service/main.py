@@ -1,6 +1,6 @@
 from fastapi import FastAPI, HTTPException, Request, UploadFile, File
 from fastapi.responses import JSONResponse
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, model_validator
 from typing import Optional, List, Dict, Any
 from starlette.middleware.base import BaseHTTPMiddleware
 import json
@@ -26,6 +26,19 @@ DASHSCOPE_KEY     = os.getenv("DASHSCOPE_API_KEY",  "")
 # ── 内部接口鉴权 Key ──────────────────────────────────────────────────────
 # 后端调用 /internal/ai/* 接口需在请求头携带 X-AI-Internal-Key
 AI_INTERNAL_KEY   = os.getenv("AI_INTERNAL_KEY",    "")
+APP_ENV          = os.getenv("APP_ENV", "development")
+
+# 生产环境必须配置 AI_INTERNAL_KEY，否则 /internal/ai/* 完全裸露
+if APP_ENV == "production" and not AI_INTERNAL_KEY:
+    raise RuntimeError(
+        "生产环境（APP_ENV=production）必须配置 AI_INTERNAL_KEY，"
+        "否则 /internal/ai/* 内部接口将无鉴权保护"
+    )
+
+# 启动日志：打印 key 配置状态，便于排查 401 问题
+print(f"[auth] AI_INTERNAL_KEY configured: {bool(AI_INTERNAL_KEY)}")
+if not AI_INTERNAL_KEY:
+    print("[auth] WARNING: AI_INTERNAL_KEY 未配置，/internal/ai/* 处于无鉴权状态（仅开发模式安全）")
 
 
 # ── 鉴权中间件：保护 /internal/ai/* 接口 ─────────────────────────────────
@@ -35,7 +48,6 @@ AI_INTERNAL_KEY   = os.getenv("AI_INTERNAL_KEY",    "")
 async def verify_internal_key(request: Request, call_next):
     # 仅保护内部接口，其他路径放行（健康检查等）
     if request.url.path.startswith("/internal/ai/"):
-        # 未配置 key 时跳过鉴权（开发模式）
         if AI_INTERNAL_KEY:
             provided_key = request.headers.get("X-AI-Internal-Key", "")
             if not provided_key or provided_key != AI_INTERNAL_KEY:
@@ -43,6 +55,7 @@ async def verify_internal_key(request: Request, call_next):
                     status_code=401,
                     content={"detail": "无效的内部接口凭据"}
                 )
+        # else: key 未配置（开发模式）跳过鉴权
     response = await call_next(request)
     return response
 
@@ -287,6 +300,76 @@ class VoiceTranscribeRequest(BaseModel):
     audio_url: str
 
 
+# ── Evaluation Result 校验模型（数据质量 P0）────────────────────────────
+# 用于校验 LLM 输出的评分结构，越界分数 / 空参考答案会被拒绝并走 fallback。
+class EvaluationResult(BaseModel):
+    totalScore: float = Field(..., ge=0, le=100)
+    professionalScore: float = Field(..., ge=0, le=100)
+    logicScore: float = Field(..., ge=0, le=100)
+    completenessScore: float = Field(..., ge=0, le=100)
+    analysisScore: float = Field(..., ge=0, le=100)
+    expressionScore: float = Field(..., ge=0, le=100)
+    jobMatchScore: float = Field(..., ge=0, le=100)
+    strengths: List[str] = Field(default_factory=list)
+    weaknesses: List[str] = Field(default_factory=list)
+    suggestions: List[str] = Field(default_factory=list)
+    referenceAnswer: str = Field(..., min_length=50)
+
+
+def build_fallback_evaluation(req: EvaluateRequest, llm_failed: bool = False) -> dict:
+    """构建启发式评分兜底结果（始终返回合法 EvaluationResult 结构）。"""
+    answer_len = len(req.answer)
+    has_keywords = any(kw in req.answer for kw in ["例如", "比如", "因为", "所以", "首先", "其次", "第一", "第二"])
+    base_score = min(100, max(40, 50 + answer_len // 20))
+    if has_keywords: base_score += 8
+    if answer_len > 200: base_score += 5
+    if answer_len > 500: base_score += 5
+
+    ps = min(100, base_score + 3)
+    ls = min(100, base_score + (2 if has_keywords else -5))
+    cs = min(100, base_score + (5 if answer_len > 100 else -5))
+    ans = min(100, base_score)
+    es = min(100, base_score - 2)
+    jm = min(100, base_score + 2)
+    total = ps*0.30 + ls*0.20 + cs*0.15 + ans*0.15 + es*0.10 + jm*0.10
+
+    strengths, weaknesses, suggestions = [], [], []
+    if llm_failed:
+        weaknesses.append("AI 评分服务暂不可用，以下为系统启发式兜底评分")
+        suggestions.append("请在 AI 服务恢复后重新提交答案以获取模型评分")
+    if answer_len > 200:
+        strengths.append("回答内容较充实")
+    else:
+        weaknesses.append("回答内容偏简短")
+        suggestions.append("建议增加更多具体细节和案例支撑")
+    if has_keywords:
+        strengths.append("逻辑结构较为清晰")
+    else:
+        weaknesses.append("回答逻辑性有待提升")
+        suggestions.append("建议使用 STAR 法则组织回答结构")
+
+    result = EvaluationResult(
+        totalScore=round(total),
+        professionalScore=round(ps),
+        logicScore=round(ls),
+        completenessScore=round(cs),
+        analysisScore=round(ans),
+        expressionScore=round(es),
+        jobMatchScore=round(jm),
+        strengths=strengths,
+        weaknesses=weaknesses,
+        suggestions=suggestions,
+        referenceAnswer=(
+            f"要点1：先界定问题中的核心概念与边界，说明适用场景。\n"
+            f"要点2：给出解决思路或步骤（结合 {req.difficulty} 难度应有的深度）。\n"
+            f"要点3：补充关键细节、常见坑点或最佳实践。\n"
+            f"要点4：结合岗位技能说明落地方式与可量化的结果。\n"
+            f"评分参考：回答是否结构清晰、是否结合实例、深度是否匹配难度。"
+        ),
+    )
+    return result.model_dump()
+
+
 # ── Endpoints ───────────────────────────────────────────────────────────────
 
 @app.get("/health")
@@ -446,6 +529,13 @@ async def evaluate_answer(req: EvaluateRequest):
 5. 表达能力（10%）：语言组织是否流畅
 6. 岗位匹配度（10%）：回答是否符合岗位要求
 
+【重要】referenceAnswer 是给候选人学习用的"标准答案"，必须满足：
+- 针对该问题给出详实、可直接对照学习的标准回答（不是复述用户答案，也不是空话套话）
+- 采用分点结构：以"要点N："开头分 3-5 个要点，每个要点后附一句解释
+- 贴合岗位技能与难度水平，体现该岗位期望的答案深度
+- 总长度约 200-400 字
+- 结尾用"评分参考："给出 1-2 句提示，说明什么样的回答能拿高分
+
 输出严格 JSON，格式：
 {{
   "totalScore": 总分(整数0-100),
@@ -458,56 +548,47 @@ async def evaluate_answer(req: EvaluateRequest):
   "strengths": ["优点1", "优点2"],
   "weaknesses": ["不足1", "不足2"],
   "suggestions": ["建议1", "建议2"],
-  "referenceAnswer": "参考答案"
+  "referenceAnswer": "要点1：...\n要点2：...\n要点3：...\n评分参考：..."
 }}
 """
     llm_result = call_llm([
-        {"role": "system", "content": "你是专业面试官，请公正评分。"},
+        {"role": "system", "content": "你是专业面试官，请公正评分。referenceAnswer 是供候选人学习的标准答案，必须详实、结构化、可直接对照，禁止输出占位符。"},
         {"role": "user",   "content": prompt},
     ])
+    print(f"[evaluate] LLM call returned: {len(llm_result) if llm_result else 0} chars; "
+          f"LLM_API_KEY set={bool(LLM_API_KEY)}, model={MODEL_NAME}")
     if llm_result:
         try:
             parsed = _parse_llm_json(llm_result)
+            print(f"[evaluate] parsed totalScore={parsed.get('totalScore') if parsed else 'N/A'}")
             if parsed:
-                return JSONResponse(content=parsed)
+                # P0 数据质量：用 Pydantic 校验 LLM 输出，越界分数/空参考答案被拒
+                try:
+                    validated = EvaluationResult.model_validate(parsed)
+                    # 防御：LLM 可能返回 totalScore=0 但维度分有值（或反之），
+                    # 若 totalScore 为 0 但任一维度分 >0，按维度分加权和重算 totalScore，避免评分失效
+                    dim_scores = [validated.professionalScore, validated.logicScore,
+                                  validated.completenessScore, validated.analysisScore,
+                                  validated.expressionScore, validated.jobMatchScore]
+                    if validated.totalScore == 0 and any(s > 0 for s in dim_scores):
+                        weighted = (validated.professionalScore*0.30 + validated.logicScore*0.20
+                                    + validated.completenessScore*0.15 + validated.analysisScore*0.15
+                                    + validated.expressionScore*0.10 + validated.jobMatchScore*0.10)
+                        print(f"[evaluate] totalScore=0 but dims have values, recalculating to {round(weighted)}")
+                        validated.totalScore = round(weighted)
+                    # 防御：若 LLM 返回 0 分但 referenceAnswer 非空（即正常评分），保留维度分
+                    print(f"[evaluate] VALID LLM success: totalScore={validated.totalScore}")
+                    return JSONResponse(content=validated.model_dump())
+                except Exception as e:
+                    print(f"[evaluate] LLM output validation failed, using fallback: {e}")
+            else:
+                print(f"[evaluate] _parse_llm_json returned None. LLM raw head: {llm_result[:200]!r}")
         except json.JSONDecodeError:
             pass
 
-    # Fallback scoring
-    answer_len = len(req.answer)
-    has_keywords = any(kw in req.answer for kw in ["例如", "比如", "因为", "所以", "首先", "其次", "第一", "第二"])
-    base_score = min(100, max(40, 50 + answer_len // 20))
-    if has_keywords: base_score += 8
-    if answer_len > 200: base_score += 5
-    if answer_len > 500: base_score += 5
-
-    ps = min(100, base_score + 3)
-    ls = min(100, base_score + (2 if has_keywords else -5))
-    cs = min(100, base_score + (5 if answer_len > 100 else -5))
-    ans = min(100, base_score)
-    es = min(100, base_score - 2)
-    jm = min(100, base_score + 2)
-    total = ps*0.30 + ls*0.20 + cs*0.15 + ans*0.15 + es*0.10 + jm*0.10
-
-    strengths, weaknesses, suggestions = [], [], []
-    if answer_len > 200:
-        strengths.append("回答内容较充实")
-    else:
-        weaknesses.append("回答内容偏简短")
-        suggestions.append("建议增加更多具体细节和案例支撑")
-    if has_keywords:
-        strengths.append("逻辑结构较为清晰")
-    else:
-        weaknesses.append("回答逻辑性有待提升")
-        suggestions.append("建议使用 STAR 法则组织回答结构")
-
-    return JSONResponse(content={
-        "totalScore": round(total),
-        "professionalScore": ps, "logicScore": ls, "completenessScore": cs,
-        "analysisScore": ans, "expressionScore": es, "jobMatchScore": jm,
-        "strengths": strengths, "weaknesses": weaknesses, "suggestions": suggestions,
-        "referenceAnswer": f"关于「{req.question}」的参考答案将在此展示。",
-    })
+    # Fallback scoring（始终返回合法 EvaluationResult 结构）
+    print(f"[evaluate] FALLBACK triggered (llm_failed={not bool(llm_result)})")
+    return JSONResponse(content=build_fallback_evaluation(req, llm_failed=True))
 
 
 @app.post("/internal/ai/report/generate")

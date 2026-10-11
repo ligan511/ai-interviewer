@@ -17,11 +17,11 @@ public class ReportController {
     @GetMapping("/interviews/{sessionId}/report")
     public ApiResponse<?> getReport(@PathVariable Long sessionId) {
         // 始终按需重新生成，保证报告反映最新的评分数据（评分为异步，可能存在滞后）
-        var report = reportService.generateReport(sessionId);
-        if (report == null) {
+        Map<String, Object> result = reportService.getReportWithReferences(sessionId);
+        if (result.get("report") == null) {
             return ApiResponse.notFound();
         }
-        return ApiResponse.ok(report);
+        return ApiResponse.ok(result);
     }
 
     @GetMapping("/answers/{answerId}/evaluation")

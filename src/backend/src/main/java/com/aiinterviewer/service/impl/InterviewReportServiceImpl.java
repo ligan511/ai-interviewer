@@ -66,6 +66,15 @@ public class InterviewReportServiceImpl extends ServiceImpl<InterviewReportMappe
                             .eq(AnswerEvaluation::getAnswerId, answer.getId()));
             if (evaluation == null) continue;
 
+            // P0 数据质量：跳过无效评分（totalScore=0 且所有维度=0，典型兜底/失败标记），避免污染报告
+            boolean allZero = evaluation.getTotalScore() == null
+                    || evaluation.getTotalScore().doubleValue() == 0;
+            if (allZero) {
+                continue;
+            }
+            // 读取时做加权和一致性重算
+            com.aiinterviewer.common.EvaluationValidator.validateAndNormalize(evaluation);
+
             count++;
             totalScore += evaluation.getTotalScore().doubleValue();
             professionalTotal += evaluation.getProfessionalScore().doubleValue();
@@ -81,6 +90,7 @@ public class InterviewReportServiceImpl extends ServiceImpl<InterviewReportMappe
         }
 
         if (count == 0) {
+            // 全部题目都是兜底/失败评分（totalScore=0）时，返回空报告，避免把无效数据当有效结果
             return null;
         }
 
@@ -101,6 +111,11 @@ public class InterviewReportServiceImpl extends ServiceImpl<InterviewReportMappe
         // 若所有评分均为兜底结果（总分全为 0），在摘要中追加提示
         if (count > 0 && totalScore == 0) {
             summary += " 注意：本次面试的 AI 评分服务不可用，所有评分均为系统兜底结果，仅供参考。";
+        }
+        // P0 数据质量：部分题目被跳过（兜底/失败评分）时，在摘要中注明兜底占比
+        int skipped = questions.size() - count;
+        if (skipped > 0) {
+            summary += String.format(" 注意：本次面试有 %d/%d 道题的评分为系统兜底或失败结果，未计入综合分，仅供参考。", skipped, questions.size());
         }
         report.setSummary(summary);
         report.setStrengths(distinctAll(allStrengths));
@@ -141,6 +156,47 @@ public class InterviewReportServiceImpl extends ServiceImpl<InterviewReportMappe
         result.put("weaknesses", evaluation.getWeaknesses());
         result.put("suggestions", evaluation.getSuggestions());
         result.put("referenceAnswer", evaluation.getReferenceAnswer());
+        return result;
+    }
+
+    @Override
+    public Map<String, Object> getReportWithReferences(Long sessionId) {
+        InterviewReport report = generateReport(sessionId);
+        List<Map<String, Object>> refAnswers = new ArrayList<>();
+        int validCount = 0;
+        int totalAnswered = 0;
+        if (report != null) {
+            List<InterviewQuestion> questions = questionMapper.selectList(
+                    new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<InterviewQuestion>()
+                            .eq(InterviewQuestion::getSessionId, sessionId)
+                            .orderByAsc(InterviewQuestion::getSequenceNo));
+            totalAnswered = questions.size();
+            for (InterviewQuestion q : questions) {
+                var answer = answerMapper.selectOne(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<com.aiinterviewer.entity.InterviewAnswer>()
+                                .eq(com.aiinterviewer.entity.InterviewAnswer::getQuestionId, q.getId()));
+                if (answer == null) continue;
+                var evaluation = evaluationMapper.selectOne(
+                        new com.baomidou.mybatisplus.core.conditions.query.LambdaQueryWrapper<AnswerEvaluation>()
+                                .eq(AnswerEvaluation::getAnswerId, answer.getId()));
+                if (evaluation == null) continue;
+                // 跳过兜底/失败评分（totalScore=0 的典型特征，与 generateReport 口径一致），
+                // 避免把占位参考答案混入有效题列表
+                if (evaluation.getTotalScore() == null || evaluation.getTotalScore().doubleValue() == 0) {
+                    continue;
+                }
+                validCount++;
+                Map<String, Object> item = new LinkedHashMap<>();
+                item.put("question", q.getContent());
+                item.put("referenceAnswer", evaluation.getReferenceAnswer());
+                refAnswers.add(item);
+            }
+        }
+        Map<String, Object> result = new LinkedHashMap<>();
+        result.put("report", report);
+        result.put("referenceAnswers", refAnswers);
+        result.put("validCount", validCount);
+        result.put("totalAnswered", totalAnswered);
         return result;
     }
 

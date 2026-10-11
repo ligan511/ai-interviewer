@@ -95,6 +95,16 @@
             <artifactId>httpclient5</artifactId>
         </dependency>
 
+        <!-- P1 可观测性：Spring Boot Actuator + Micrometer Prometheus Registry -->
+        <dependency>
+            <groupId>org.springframework.boot</groupId>
+            <artifactId>spring-boot-starter-actuator</artifactId>
+        </dependency>
+        <dependency>
+            <groupId>io.micrometer</groupId>
+            <artifactId>micrometer-registry-prometheus</artifactId>
+        </dependency>
+
         <!-- Test -->
         <dependency>
             <groupId>org.springframework.boot</groupId>

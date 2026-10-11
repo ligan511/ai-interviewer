@@ -23,10 +23,17 @@ public class SecurityConfig {
 
     private final JwtAuthFilter jwtAuthFilter;
     private final InternalKeyFilter internalKeyFilter;
+    private final UploadAccessFilter uploadAccessFilter;
+    private final TraceIdFilter traceIdFilter;
 
-    public SecurityConfig(@Lazy JwtAuthFilter jwtAuthFilter, @Lazy InternalKeyFilter internalKeyFilter) {
+    public SecurityConfig(@Lazy JwtAuthFilter jwtAuthFilter,
+                          @Lazy InternalKeyFilter internalKeyFilter,
+                          @Lazy UploadAccessFilter uploadAccessFilter,
+                          @Lazy TraceIdFilter traceIdFilter) {
         this.jwtAuthFilter = jwtAuthFilter;
         this.internalKeyFilter = internalKeyFilter;
+        this.uploadAccessFilter = uploadAccessFilter;
+        this.traceIdFilter = traceIdFilter;
     }
 
     @Bean
@@ -38,12 +45,19 @@ public class SecurityConfig {
             .authorizeHttpRequests(auth -> auth
                 .requestMatchers("/api/v1/auth/**").permitAll()
                 .requestMatchers("/api/v1/internal/**").permitAll()
-                .requestMatchers("/uploads/**").permitAll()
+                .requestMatchers("/actuator/health", "/actuator/prometheus", "/actuator/info").permitAll()
                 .requestMatchers(org.springframework.http.HttpMethod.OPTIONS, "/**").permitAll()
+                // /uploads/** 不再 permitAll：改为由 UploadAccessFilter 按文件归属校验鉴权（P0 安全加固）
                 .anyRequest().authenticated()
             )
             .addFilterBefore(internalKeyFilter, UsernamePasswordAuthenticationFilter.class)
-            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class);
+            .addFilterBefore(jwtAuthFilter, UsernamePasswordAuthenticationFilter.class)
+            // P0 安全加固：JwtAuthFilter 之后执行，对 /uploads/** 按文件归属校验鉴权
+            .addFilterAfter(uploadAccessFilter, UsernamePasswordAuthenticationFilter.class)
+            // P1 可观测性：traceId 全链路透传。放在 UsernamePasswordAuthenticationFilter 之前执行，
+            // 使 traceId 在所有鉴权/业务日志中可用。DisableAnonymousSessionFilter 在 SS6 已移除，
+            // 改用带 @Order 的 UsernamePasswordAuthenticationFilter 作锚点。
+            .addFilterBefore(traceIdFilter, org.springframework.security.web.authentication.UsernamePasswordAuthenticationFilter.class);
 
         return http.build();
     }

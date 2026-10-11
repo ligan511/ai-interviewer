@@ -1,0 +1,50 @@
+# AI 智能面试官系统 — Prometheus + Grafana 可观测性编排
+# 用法：在已运行的 4 服务基础上，追加监控栈：
+#   MYSQL_PASSWORD=... AI_INTERNAL_KEY=... JWT_SECRET=... \
+#   docker compose -f docker-compose.yml -f monitoring/docker-compose.monitoring.yml up -d
+# 注意：backend 需以 host 网络或 ai-net 可达，且 8081 已暴露。
+
+version: "3.8"
+
+services:
+  prometheus:
+    image: prom/prometheus:v2.53.1
+    container_name: ai-interviewer-prometheus
+    restart: unless-stopped
+    command:
+      - "--config.file=/etc/prometheus/prometheus.yml"
+    volumes:
+      - ./prometheus/prometheus.yml:/etc/prometheus/prometheus.yml:ro
+      - ./prometheus/alerts.yml:/etc/prometheus/alerts.yml:ro
+      - prometheus_data:/prometheus
+    ports:
+      - "9090:9090"
+    networks:
+      - ai-net
+    depends_on:
+      - grafana
+
+  grafana:
+    image: grafana/grafana:11.1.0
+    container_name: ai-interviewer-grafana
+    restart: unless-stopped
+    environment:
+      GF_SECURITY_ADMIN_USER: admin
+      GF_SECURITY_ADMIN_PASSWORD: ${GRAFANA_PASSWORD:-admin}
+      GF_USERS_ALLOW_SIGN_UP: "false"
+    ports:
+      - "3000:3000"
+    volumes:
+      - grafana_data:/var/lib/grafana
+      - ./grafana/provisioning:/etc/grafana/provisioning:ro
+    networks:
+      - ai-net
+
+volumes:
+  prometheus_data:
+  grafana_data:
+
+networks:
+  ai-net:
+    external: true
+    name: ai-interviewer_ai-net
